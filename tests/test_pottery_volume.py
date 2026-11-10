@@ -15,6 +15,7 @@ from pottery_volume import (
     detect_axis,
     extract_profiles,
     extract_section,
+    main,
     remove_small_components,
     resolve_scale,
 )
@@ -195,6 +196,27 @@ def test_scale_points_rejects_infinite_calculated_distance():
     )
     with pytest.raises(ValueError, match="距離"):
         resolve_scale(args, SimpleNamespace(top_y_px=0.0, bottom_y_px=10.0))
+
+
+def test_scale_bar_mm_is_rejected_without_a_matching_pixel_measurement():
+    """A known length must not be silently ignored beside another scale mode."""
+    args = SimpleNamespace(
+        scale_mm_per_px=0.5,
+        scale_points=None,
+        scale_bar_px=None,
+        scale_bar_mm=50.0,
+        vessel_height_mm=None,
+    )
+    with pytest.raises(ValueError, match="--scale-bar-px または --scale-points"):
+        resolve_scale(args, SimpleNamespace(top_y_px=0.0, bottom_y_px=10.0))
+
+
+@pytest.mark.parametrize("window", [-3, 2, 4])
+def test_smooth_window_rejects_negative_or_even_values(window):
+    """The smoothing window must follow the documented odd-or-zero rule."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(["unused.png", "--smooth-window", str(window)])
+    assert exc_info.value.code == 2
 
 
 def test_filled_mode_does_not_fall_back_to_line_mode():

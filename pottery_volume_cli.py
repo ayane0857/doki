@@ -32,6 +32,15 @@ def resolve_scale(args: argparse.Namespace, profiles: Profiles) -> float | None:
             raise ValueError(message)
         return float(value)
 
+    if (
+        args.scale_bar_mm is not None
+        and args.scale_points is None
+        and args.scale_bar_px is None
+    ):
+        raise ValueError(
+            "--scale-bar-mm は --scale-bar-px または --scale-points と一緒に指定してください"
+        )
+
     choices = [
         args.scale_mm_per_px is not None,
         args.scale_points is not None,
@@ -91,10 +100,6 @@ def resolve_scale(args: argparse.Namespace, profiles: Profiles) -> float | None:
         return validate_scale(
             args.vessel_height_mm / measured_height_px,
             "器高から計算したスケールが正しい範囲ではありません",
-        )
-    if args.scale_bar_mm is not None:
-        raise ValueError(
-            "--scale-bar-mm は --scale-bar-px または --scale-points と一緒に指定してください"
         )
     return None
 
@@ -190,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.closing_kernel < 1 or args.min_component_area < 1:
         parser.error("カーネルと最小連結成分面積は 1 以上で指定してください")
-    if args.smooth_window not in (0, 1, 2) and args.smooth_window % 2 == 0:
+    if args.smooth_window < 0 or (
+        args.smooth_window != 0 and args.smooth_window % 2 == 0
+    ):
         parser.error("--smooth-window は奇数か 0 で指定してください")
     try:
         image = read_image(args.input)
