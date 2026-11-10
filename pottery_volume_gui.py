@@ -35,8 +35,9 @@ def _enable_windows_file_drop(
     hwnd = int(root.winfo_id())  # type: ignore[attr-defined]
     wm_dropfiles = 0x0233
     gwlp_wndproc = -4
+    lresult_type = getattr(wintypes, "LRESULT", ctypes.c_ssize_t)
     wnd_proc_type = ctypes.WINFUNCTYPE(
-        wintypes.LRESULT,
+        lresult_type,
         wintypes.HWND,
         wintypes.UINT,
         wintypes.WPARAM,
@@ -50,7 +51,7 @@ def _enable_windows_file_drop(
         wintypes.WPARAM,
         wintypes.LPARAM,
     ]
-    call_window_proc.restype = wintypes.LRESULT
+    call_window_proc.restype = lresult_type
     drag_query_file = shell32.DragQueryFileW
     drag_query_file.argtypes = [
         wintypes.HANDLE,
