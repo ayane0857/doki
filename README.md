@@ -4,7 +4,9 @@
 
 ## かんたんに使う
 
-Windows では pottery_volume_gui.pyw をダブルクリックすると設定画面が開きます。画像を選び、スケール方法や必要な補正値を設定して「計算する」を押してください。画像ファイルをこの .pyw にドロップしてから起動すると、その画像を選択済みにできます。画面には結果と警告が表示され、JSON とデバッグ画像も保存されます。ターミナルから起動する場合は次のコマンドでも設定画面を開けます。
+Windows では pottery_volume_gui.pyw をダブルクリックすると設定画面が開きます。画像を選び、スケール方法や必要な補正値を設定して「計算する」を押してください。画像を設定画面へドロップして選択することもできます。画面には結果と警告が表示され、JSON は出力先を指定した場合だけ保存されます。ターミナルから起動する場合は次のコマンドでも設定画面を開けます。
+
+スケールを簡単に測るには、「画像上で測定…」を押してください。画像上で既知の長さの両端を順にクリックし、実寸 mm を入力して「スケール設定へ反映」を押すと、2点座標と mm が自動入力されます。画像が大きい場合はスクロールして確認できます。
 
 ~~~powershell
 python pottery_volume.py
@@ -54,7 +56,7 @@ dist\PotteryVolume.exe
 
 EXE は Python や別途ライブラリを入れていない Windows PC でも起動できます。起動後は画像を選び、スケールなどを設定して計算します。画像ファイルを EXE にドロップして起動すると、その画像を選択済みにできます。
 
-CMD からGUIを開かずに実行する場合は --batch を付けます。結果は JSON と指定した出力フォルダーに保存されます。
+CMD からGUIを開かずに実行する場合は --batch を付けます。JSON が必要な場合だけ --json-out を指定してください。
 
 ~~~text
 dist\PotteryVolume.exe --batch input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
@@ -86,7 +88,7 @@ python pottery_volume.py input.png --scale-points 40,20,140,20 --scale-bar-mm 50
 python pottery_volume.py input.png --vessel-height-mm 120
 ~~~
 
-スケールを指定しない場合は警告を出し、長さを px、体積を px³ として出力します。既定では作業ディレクトリに result.json を保存します。--json-out path.json で保存先を変更できます。スケールを指定した結果には mm³、cm³、mL を出力します（1 cm³ = 1 mL）。
+スケールを指定しない場合は警告を出し、長さを px、体積を px³ として出力します。JSON は既定では保存せず、--json-out path.json を指定した場合だけ保存します。スケールを指定した結果には mm³、cm³、mL を出力します（1 cm³ = 1 mL）。
 
 ## 自動検出と上書き
 

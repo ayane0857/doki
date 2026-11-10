@@ -156,8 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json-out",
         type=Path,
-        default=Path("result.json"),
-        help="JSON 出力先 (既定: ./result.json)",
+        help="JSON 出力先。省略時はJSONを保存しません",
     )
     return parser
 
@@ -189,8 +188,10 @@ def _print_result(
         print(f"警告: {warning}", file=sys.stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the image-to-volume CLI."""
+def analyze(
+    argv: list[str] | None = None,
+) -> tuple[argparse.Namespace, dict[str, Any], str, list[str]]:
+    """Analyze an image and return the parsed options, result, and warnings."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.closing_kernel < 1 or args.min_component_area < 1:
@@ -199,45 +200,53 @@ def main(argv: list[str] | None = None) -> int:
         args.smooth_window != 0 and args.smooth_window % 2 == 0
     ):
         parser.error("--smooth-window は奇数か 0 で指定してください")
+    image = read_image(args.input)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary, threshold_method = binarize_image(gray, args.adaptive_threshold)
+    binary = remove_small_components(binary, args.min_component_area)
+    axis_x, warnings = detect_axis(binary, args.axis_x)
+    section = extract_section(
+        binary, axis_x, args.crop, args.closing_kernel, args.profile_mode
+    )
+    profiles = extract_profiles(
+        section, axis_x, args.liquid_level_y, args.smooth_window
+    )
+    scale = resolve_scale(args, profiles)
+    all_warnings = warnings + section.warnings
+    if scale is None:
+        all_warnings.append(
+            "スケール未指定のため、体積は px³ 単位です。実寸換算にはスケールを指定してください。"
+        )
+    result = compute_volumes(profiles, section.mask, axis_x, scale, section.mode)
+    result.update(
+        {
+            "input": str(args.input),
+            "axis_x_px": axis_x,
+            "section_roi": list(section.roi),
+            "section_mode": section.mode,
+            "threshold_method": threshold_method,
+            "top_y_px": profiles.top_y_px,
+            "bottom_y_px": profiles.bottom_y_px,
+            "warnings": all_warnings,
+        }
+    )
+    if args.debug_dir:
+        visualize(image, axis_x, section, profiles, scale, args.debug_dir)
+    return args, result, section.mode, all_warnings
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the image-to-volume CLI."""
     try:
-        image = read_image(args.input)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        binary, threshold_method = binarize_image(gray, args.adaptive_threshold)
-        binary = remove_small_components(binary, args.min_component_area)
-        axis_x, warnings = detect_axis(binary, args.axis_x)
-        section = extract_section(
-            binary, axis_x, args.crop, args.closing_kernel, args.profile_mode
-        )
-        profiles = extract_profiles(
-            section, axis_x, args.liquid_level_y, args.smooth_window
-        )
-        scale = resolve_scale(args, profiles)
-        all_warnings = warnings + section.warnings
-        if scale is None:
-            all_warnings.append(
-                "スケール未指定のため、体積は px³ 単位です。実寸換算にはスケールを指定してください。"
+        args, result, section_mode, all_warnings = analyze(argv)
+        _print_result(result, section_mode, all_warnings)
+        if args.json_out:
+            args.json_out.parent.mkdir(parents=True, exist_ok=True)
+            args.json_out.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-        result = compute_volumes(profiles, section.mask, axis_x, scale, section.mode)
-        result.update(
-            {
-                "input": str(args.input),
-                "axis_x_px": axis_x,
-                "section_roi": list(section.roi),
-                "section_mode": section.mode,
-                "threshold_method": threshold_method,
-                "top_y_px": profiles.top_y_px,
-                "bottom_y_px": profiles.bottom_y_px,
-                "warnings": all_warnings,
-            }
-        )
-        _print_result(result, section.mode, all_warnings)
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        print(f"JSON: {args.json_out}")
+            print(f"JSON: {args.json_out}")
         if args.debug_dir:
-            visualize(image, axis_x, section, profiles, scale, args.debug_dir)
             print(f"デバッグ画像: {args.debug_dir}")
         return 0
     except (ValueError, OSError, cv2.error) as exc:

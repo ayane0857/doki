@@ -19,6 +19,7 @@ from pottery_volume import (
     remove_small_components,
     resolve_scale,
 )
+from pottery_volume_gui import pixel_distance
 
 
 def run_pipeline(image: np.ndarray) -> tuple[dict, float]:
@@ -150,6 +151,11 @@ def test_scale_conversion_is_cubic_and_reports_ml():
     assert result["units"]["volume"] == "mm3"
     assert result["capacity_cm3"] == pytest.approx(result["capacity"] / 1000)
     assert result["capacity_ml"] == pytest.approx(result["capacity_cm3"])
+
+
+def test_pixel_distance_returns_image_distance():
+    """The GUI measurement helper reports the Euclidean pixel distance."""
+    assert pixel_distance((10, 20), (13, 24)) == pytest.approx(5)
 
 
 def test_low_resolution_270_by_170_image():
