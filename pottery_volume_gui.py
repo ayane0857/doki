@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from pottery_volume_cli import analyze
+from pottery_volume_core import read_image
 
 
 def pixel_distance(
@@ -445,6 +446,381 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
     ttk.Button(
         scale_frame, text="画像上で測定…", command=open_measurement_tool
     ).grid(row=0, column=2, padx=6, pady=4)
+
+    def open_scale_reader() -> None:
+        import base64
+        import threading
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+
+        image_text = image_var.get().strip().strip('"')
+        if not image_text:
+            messagebox.showerror(
+                "画像が未指定です", "先に画像を選択してください。", parent=root
+            )
+            return
+        image_path = Path(image_text)
+        if not image_path.is_file():
+            messagebox.showerror("画像が見つかりません", image_text, parent=root)
+            return
+        try:
+            import cv2
+            import numpy as np
+
+            image = read_image(image_path)
+            success, encoded = cv2.imencode(".png", image)
+            if not success:
+                raise ValueError("画像を表示用に変換できません。")
+            image_data = base64.b64encode(encoded).decode("ascii")
+            image_height, image_width = image.shape[:2]
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("画像を開けません", str(exc), parent=root)
+            return
+
+        window = tk.Toplevel(root)
+        window.title("画像からスケールを読み取る")
+        window.geometry("1120x760")
+        window.minsize(760, 520)
+        window.transient(root)
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+        ttk.Label(
+            window,
+            text="OCRで長さと単位を読み、候補の目盛り線を選びます。赤線の両端は画像上でクリックして調整できます。",
+            wraplength=1080,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=8)
+
+        canvas_frame = ttk.Frame(window)
+        canvas_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=4)
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas = tk.Canvas(canvas_frame, background="#303030", highlightthickness=0)
+        x_scroll = ttk.Scrollbar(
+            canvas_frame, orient="horizontal", command=canvas.xview
+        )
+        y_scroll = ttk.Scrollbar(
+            canvas_frame, orient="vertical", command=canvas.yview
+        )
+        canvas.configure(xscrollcommand=x_scroll.set, yscrollcommand=y_scroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        photo = tk.PhotoImage(data=image_data)
+        canvas.create_image(0, 0, image=photo, anchor="nw")
+        canvas.configure(scrollregion=(0, 0, image_width, image_height))
+        canvas.image = photo
+
+        panel = ttk.Frame(window, padding=(12, 4))
+        panel.grid(row=1, column=1, sticky="ns")
+        panel.columnconfigure(0, weight=1)
+        label_candidates: list[object] = []
+        bar_candidates: list[object] = []
+        overlay_ids: list[int] = []
+        manual_points: list[tuple[float, float]] = []
+        ocr_summary_var = tk.StringVar(value="OCR読み取り中…")
+        label_choice_var = tk.StringVar()
+        value_var = tk.StringVar()
+        unit_var = tk.StringVar(value="cm")
+        bar_choice_var = tk.StringVar()
+        bar_length_var = tk.StringVar(value="—")
+        scale_result_var = tk.StringVar(value="mm/px: —")
+        points_status_var = tk.StringVar(value="自動検出の結果を確認してください。")
+
+        ttk.Label(panel, text="OCRで読み取った長さ").grid(
+            row=0, column=0, sticky="w", pady=(4, 2)
+        )
+        ocr_summary = ttk.Label(
+            panel, textvariable=ocr_summary_var, wraplength=300, justify="left"
+        )
+        ocr_summary.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        label_combo = ttk.Combobox(
+            panel,
+            textvariable=label_choice_var,
+            state="readonly",
+            width=35,
+        )
+        label_combo.grid(row=2, column=0, sticky="ew", pady=2)
+        ttk.Label(panel, text="距離の数値と単位（必要なら修正）").grid(
+            row=3, column=0, sticky="w", pady=(10, 2)
+        )
+        length_row = ttk.Frame(panel)
+        length_row.grid(row=4, column=0, sticky="ew")
+        length_row.columnconfigure(0, weight=1)
+        ttk.Entry(length_row, textvariable=value_var, width=14).grid(
+            row=0, column=0, sticky="ew", padx=(0, 6)
+        )
+        ttk.Combobox(
+            length_row,
+            textvariable=unit_var,
+            values=("mm", "cm", "m"),
+            state="readonly",
+            width=6,
+        ).grid(row=0, column=1, sticky="e")
+        ttk.Label(panel, text="目盛り線の候補").grid(
+            row=5, column=0, sticky="w", pady=(12, 2)
+        )
+        bar_combo = ttk.Combobox(
+            panel,
+            textvariable=bar_choice_var,
+            state="readonly",
+            width=35,
+        )
+        bar_combo.grid(row=6, column=0, sticky="ew", pady=2)
+        ttk.Label(panel, text="画像上の長さ").grid(
+            row=7, column=0, sticky="w", pady=(10, 0)
+        )
+        ttk.Label(panel, textvariable=bar_length_var).grid(
+            row=8, column=0, sticky="w"
+        )
+        ttk.Label(
+            panel,
+            textvariable=points_status_var,
+            wraplength=300,
+            justify="left",
+        ).grid(row=9, column=0, sticky="ew", pady=(8, 2))
+        ttk.Label(
+            panel,
+            textvariable=scale_result_var,
+            font=(ui_font, 13, "bold"),
+        ).grid(row=10, column=0, sticky="w", pady=(8, 12))
+
+        def current_label():
+            index = label_combo.current()
+            return label_candidates[index] if 0 <= index < len(label_candidates) else None
+
+        def current_bar():
+            if manual_points:
+                if len(manual_points) == 2:
+                    return manual_points[0], manual_points[1]
+                return None
+            index = bar_combo.current()
+            if 0 <= index < len(bar_candidates):
+                candidate = bar_candidates[index]
+                return (candidate.x1, candidate.y1), (candidate.x2, candidate.y2)
+            return None
+
+        def redraw_overlay() -> None:
+            for item_id in overlay_ids:
+                canvas.delete(item_id)
+            overlay_ids.clear()
+            for index, candidate in enumerate(bar_candidates):
+                color = "#e0a020" if index != bar_combo.current() else "#ff3030"
+                width = 1 if index != bar_combo.current() else 3
+                overlay_ids.append(
+                    canvas.create_line(
+                        candidate.x1,
+                        candidate.y1,
+                        candidate.x2,
+                        candidate.y2,
+                        fill=color,
+                        width=width,
+                    )
+                )
+            label = current_label()
+            if label is not None:
+                x0, y0, x1, y1 = label.bounds
+                overlay_ids.append(
+                    canvas.create_rectangle(
+                        x0, y0, x1, y1, outline="#20c080", width=2
+                    )
+                )
+            selected = current_bar()
+            if selected is not None:
+                (x0, y0), (x1, y1) = selected
+                for x, y in ((x0, y0), (x1, y1)):
+                    overlay_ids.append(
+                        canvas.create_oval(
+                            x - 5, y - 5, x + 5, y + 5, outline="#ff3030", width=2
+                        )
+                    )
+                overlay_ids.append(
+                    canvas.create_line(x0, y0, x1, y1, fill="#ff3030", width=3)
+                )
+
+        def update_scale_result(*_args: object) -> None:
+            selected = current_bar()
+            if selected is None:
+                bar_length_var.set("—")
+                scale_result_var.set("mm/px: —")
+                return
+            (x0, y0), (x1, y1) = selected
+            pixels = math.hypot(x1 - x0, y1 - y0)
+            bar_length_var.set(f"{pixels:.2f} px")
+            try:
+                length = float(value_var.get().strip().replace(",", "."))
+                factors = {"mm": 1.0, "cm": 10.0, "m": 1000.0}
+                millimeters = length * factors[unit_var.get()]
+                if not math.isfinite(millimeters) or millimeters <= 0 or pixels <= 0:
+                    raise ValueError
+            except (KeyError, ValueError):
+                scale_result_var.set("mm/px: 数値と単位を確認してください")
+                return
+            scale_result_var.set(f"mm/px: {millimeters / pixels:.8g}")
+
+        def update_bar_choices() -> None:
+            nonlocal bar_candidates
+            from pottery_scale import rank_scale_bars
+
+            bar_candidates = rank_scale_bars(
+                all_bar_candidates, current_label(), image.shape
+            )
+            choices = [
+                f"{index + 1}: {bar.pixels:.1f} px  (y={((bar.y1 + bar.y2) / 2):.0f})"
+                for index, bar in enumerate(bar_candidates)
+            ]
+            bar_combo.configure(values=choices)
+            if choices:
+                bar_combo.current(0)
+                points_status_var.set(
+                    "赤線の両端を確認してください。線をクリックすると両端を手動指定できます。"
+                )
+            else:
+                bar_combo.set("")
+                points_status_var.set(
+                    "目盛り線を自動検出できませんでした。画像上で線の両端を順にクリックしてください。"
+                )
+            redraw_overlay()
+            update_scale_result()
+
+        all_bar_candidates: list[object] = []
+
+        def on_label_selected(_event: object | None = None) -> None:
+            label = current_label()
+            if label is not None:
+                value_var.set(f"{label.value:g}")
+                unit_var.set(label.unit)
+            manual_points.clear()
+            update_bar_choices()
+
+        def on_bar_selected(_event: object | None = None) -> None:
+            manual_points.clear()
+            redraw_overlay()
+            update_scale_result()
+
+        def on_canvas_click(event: object) -> None:
+            x = float(canvas.canvasx(event.x))  # type: ignore[attr-defined]
+            y = float(canvas.canvasy(event.y))  # type: ignore[attr-defined]
+            if x < 0 or y < 0 or x >= image_width or y >= image_height:
+                return
+            if len(manual_points) == 2:
+                manual_points.clear()
+            manual_points.append((x, y))
+            if len(manual_points) == 1:
+                points_status_var.set("始点を設定しました。終点をクリックしてください。")
+            else:
+                points_status_var.set(
+                    "画像上で始点・終点を指定しました。結果を確認して反映してください。"
+                )
+            redraw_overlay()
+            update_scale_result()
+
+        def apply_scale() -> None:
+            selected = current_bar()
+            if selected is None or len(manual_points) == 1:
+                messagebox.showerror(
+                    "目盛り線を指定してください",
+                    "候補を選ぶか、画像上で目盛り線の両端をクリックしてください。",
+                    parent=window,
+                )
+                return
+            (x0, y0), (x1, y1) = selected
+            pixels = math.hypot(x1 - x0, y1 - y0)
+            try:
+                length = float(value_var.get().strip().replace(",", "."))
+                factor = {"mm": 1.0, "cm": 10.0, "m": 1000.0}[unit_var.get()]
+                millimeters = length * factor
+                mm_per_px = millimeters / pixels
+                if (
+                    not math.isfinite(mm_per_px)
+                    or mm_per_px <= 0
+                    or not math.isfinite(pixels)
+                    or pixels <= 0
+                ):
+                    raise ValueError
+            except (KeyError, ValueError, ZeroDivisionError):
+                messagebox.showerror(
+                    "長さを確認してください",
+                    "距離は正の数値で、単位は mm、cm、m のいずれかを指定してください。",
+                    parent=window,
+                )
+                return
+            direct_scale_var.set(f"{mm_per_px:.10g}")
+            scale_mode_var.set("mm/px を直接指定")
+            window.destroy()
+
+        label_combo.bind("<<ComboboxSelected>>", on_label_selected)
+        bar_combo.bind("<<ComboboxSelected>>", on_bar_selected)
+        value_var.trace_add("write", update_scale_result)
+        unit_var.trace_add("write", update_scale_result)
+        canvas.bind("<Button-1>", on_canvas_click)
+        ttk.Button(panel, text="mm/pxとして反映", command=apply_scale).grid(
+            row=11, column=0, sticky="ew", pady=3
+        )
+        ttk.Button(panel, text="閉じる", command=window.destroy).grid(
+            row=12, column=0, sticky="ew", pady=3
+        )
+
+        def finish_detection(labels: list[object], bars: list[object]) -> None:
+            if not window.winfo_exists():
+                return
+            label_candidates[:] = labels
+            all_bar_candidates[:] = bars
+            if labels:
+                label_combo.configure(
+                    values=[
+                        f"{item.text}  →  {item.length_mm:g} mm  ({item.confidence:.0%})"
+                        for item in labels
+                    ]
+                )
+                label_combo.current(0)
+                ocr_summary_var.set(
+                    "読み取った長さ: "
+                    + " / ".join(f"{item.text} ({item.confidence:.0%})" for item in labels)
+                )
+                on_label_selected()
+            else:
+                label_combo.configure(values=())
+                ocr_summary_var.set(
+                    "単位付きの長さを読めませんでした。数値と単位を入力してください。"
+                )
+                update_bar_choices()
+
+        def detect_in_background() -> None:
+            try:
+                from pottery_scale import (
+                    detect_horizontal_scale_bars,
+                    recognize_scale_text,
+                )
+
+                bars = detect_horizontal_scale_bars(image)
+                labels = recognize_scale_text(image)
+                window.after(0, lambda: finish_detection(labels, bars))
+            except Exception as exc:
+                error_text = str(exc)
+
+                def finish_error(error_text: str = error_text) -> None:
+                    if not window.winfo_exists():
+                        return
+                    ocr_summary_var.set(
+                        f"OCRを利用できませんでした: {error_text}\n数値と単位を入力して続けられます。"
+                    )
+                    from pottery_scale import detect_horizontal_scale_bars
+
+                    update_bars = detect_horizontal_scale_bars(image)
+                    finish_detection([], update_bars)
+
+                try:
+                    window.after(0, finish_error)
+                except tk.TclError:
+                    pass
+
+        threading.Thread(target=detect_in_background, daemon=True).start()
+
+    ttk.Button(
+        scale_frame,
+        text="画像から自動設定…",
+        command=open_scale_reader,
+    ).grid(row=1, column=2, padx=6, pady=4, sticky="ns")
 
     detection = ttk.LabelFrame(outer, text="自動検出の調整（必要な場合のみ）")
     detection.grid(row=2, column=0, columnspan=3, sticky="ew", pady=4)

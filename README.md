@@ -8,6 +8,8 @@ Windows では pottery_volume_gui.pyw をダブルクリックすると設定画
 
 スケールを簡単に測るには、「画像上で測定…」を押してください。画像上で既知の長さの両端を順にクリックし、実寸 mm を入力して「スケール設定へ反映」を押すと、2点座標と mm が自動入力されます。画像が大きい場合はスクロールして確認できます。
 
+スケール表記から設定するには、「画像から自動設定…」を押してください。OCRが「10cm」「50 mm」「1m」などの距離と単位を読み、横方向の目盛り線を検出します。候補の長さと赤線の両端を確認し、「mm/pxとして反映」を押すと単位を mm に換算してスケールへ設定します。OCRが読み違えた場合は距離や単位を直し、線を検出できない場合は画像上で両端をクリックしてください。
+
 ~~~powershell
 python pottery_volume.py
 ~~~
@@ -48,18 +50,18 @@ python -m pip install -r requirements-dev.txt
 
 ## Windows EXE の作成
 
-Windows で build_exe.bat をダブルクリックすると、PyInstaller が設定画面付きの単体 EXE を作成します。
+On Windows, run build_exe.bat to create the app folder. Keep the EXE and its _internal folder together when sharing.
 
 ~~~text
-dist\PotteryVolume.exe
+dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe
 ~~~
 
-EXE は Python や別途ライブラリを入れていない Windows PC でも起動できます。起動後は画像を選び、スケールなどを設定して計算します。画像ファイルを EXE にドロップして起動すると、その画像を選択済みにできます。
+The app folder contains the runtime libraries and OCR models. Python is not required on the target PC.
 
 CMD からGUIを開かずに実行する場合は --batch を付けます。JSON が必要な場合だけ --json-out を指定してください。
 
 ~~~text
-dist\PotteryVolume.exe --batch input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
+dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe --batch input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
 ~~~
 
 ## 実行
@@ -116,6 +118,10 @@ python pottery_volume.py input.png --axis-x 135 --crop 135,20,260,240 --liquid-l
 | --min-component-area N | 二値化後に除去する小連結成分のしきい値 |
 | --smooth-window N | プロファイル平滑化窓（奇数）。0 で無効 |
 | --debug-dir DIR | detection_overlay.png、section_closed.png、section_mask.png、profiles.png を保存 |
+
+### 画像上のスケール表記を使う
+
+GUIの「画像から自動設定…」は、OCRから mm、cm、m 表記と数値を読み、目盛り線の候補を画像から検出します。たとえば「10cm」の線が 436 px なら 100 mm ÷ 436 px = 約 0.22936 mm/px として設定します。認識した値・単位と線の両端を画面で確認してから反映してください。表記が読めない画像でも、距離と単位の手入力および線の両端クリックで設定できます。
 
 ## 出力の見方
 
