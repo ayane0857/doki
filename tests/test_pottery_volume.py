@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -15,6 +16,7 @@ from pottery_volume import (
     extract_profiles,
     extract_section,
     remove_small_components,
+    resolve_scale,
 )
 
 
@@ -158,3 +160,59 @@ def test_low_resolution_270_by_170_image():
     assert result["capacity"] == pytest.approx(expected, rel=0.05)
     assert result["wall_volume"] == pytest.approx(expected_wall, rel=0.05)
     assert result["pappus_difference_percent"] < 5
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--scale-mm-per-px", "--scale-bar-px", "--scale-bar-mm", "--vessel-height-mm"],
+)
+def test_scale_rejects_non_finite_values(option):
+    """Scale inputs must not allow NaN or infinity into volume calculations."""
+    args = SimpleNamespace(
+        scale_mm_per_px=None,
+        scale_points=None,
+        scale_bar_px=None,
+        scale_bar_mm=None,
+        vessel_height_mm=None,
+    )
+    setattr(args, option.removeprefix("--").replace("-", "_"), math.nan)
+    if option == "--scale-bar-px":
+        args.scale_bar_mm = 10.0
+    elif option == "--scale-bar-mm":
+        args.scale_bar_px = 10.0
+    with pytest.raises(ValueError):
+        resolve_scale(args, SimpleNamespace(top_y_px=0.0, bottom_y_px=10.0))
+
+
+def test_scale_points_rejects_infinite_calculated_distance():
+    """Finite coordinates that overflow their difference must be rejected."""
+    args = SimpleNamespace(
+        scale_mm_per_px=None,
+        scale_points=(1e308, 0.0, -1e308, 0.0),
+        scale_bar_px=None,
+        scale_bar_mm=10.0,
+        vessel_height_mm=None,
+    )
+    with pytest.raises(ValueError, match="距離"):
+        resolve_scale(args, SimpleNamespace(top_y_px=0.0, bottom_y_px=10.0))
+
+
+def test_filled_mode_does_not_fall_back_to_line_mode():
+    """An explicit filled mode must fail when no enclosed section exists."""
+    image = cylinder_shell()
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary, _ = binarize_image(gray)
+    binary[45, 234:244] = 0
+    with pytest.raises(ValueError, match="filled"):
+        extract_section(binary, 180, profile_mode="filled")
+
+
+@pytest.mark.parametrize("liquid_level_y", [math.nan, math.inf, -math.inf])
+def test_liquid_level_rejects_non_finite_values(liquid_level_y):
+    """Liquid level must be finite before range clipping is applied."""
+    image = cylinder_shell()
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary, _ = binarize_image(gray)
+    section = extract_section(binary, 180)
+    with pytest.raises(ValueError, match="液面 y"):
+        extract_profiles(section, 180, liquid_level_y=liquid_level_y)
