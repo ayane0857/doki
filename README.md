@@ -14,15 +14,6 @@ Windows では pottery_volume_gui.pyw をダブルクリックすると設定画
 python pottery_volume.py
 ~~~
 
-ブラウザから使う場合は、別ターミナルで次を実行し、表示された URL を開きます。
-
-~~~powershell
-streamlit run pottery_volume_web.py
-~~~
-
-Streamlitの表示する URL をブラウザで開きます。画像をアップロードし、必要なら
-mm/px や回転軸などを入力して「計算する」を押してください。
-
 画像を CMD にドラッグしてパスを自動入力する方法:
 
 1. CMD を開き、プロジェクトのフォルダーへ移動します。
@@ -66,6 +57,19 @@ dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe
 ~~~
 
 The app folder contains the runtime libraries and OCR models. Python is not required on the target PC.
+
+Linux/macOS では `build_exe.sh` を実行すると、同じ設定でアプリフォルダーを作成できます。
+スクリプトは共有ライブラリ付きPythonからビルド用のvenvを作成して使用します。
+
+~~~bash
+bash build_exe.sh
+~~~
+
+~~~text
+dist/PotteryVolume_ScaleOCR/PotteryVolume_ScaleOCR
+~~~
+
+GitHub Actions ではコミットごとにWindows版をビルドし、ZIPをArtifactとして保存します。GitHubのActionsから対象の実行結果を開き、Artifactsの `PotteryVolume_ScaleOCR-<commit-sha>` をダウンロードしてください。
 
 CMD からGUIを開かずに実行する場合は --batch を付けます。JSON が必要な場合だけ --json-out を指定してください。
 

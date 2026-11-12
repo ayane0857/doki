@@ -1,10 +1,8 @@
 # Runtime versions verified with CPython 3.14 on Windows x64.
 numpy==2.5.4
-opencv-python==5.0.0.93; platform_system == "Windows"
-opencv-python-headless==5.0.0.93; platform_system != "Windows"
+opencv-python==5.0.0.93
 scikit-image==0.26.0
 scipy==1.18.1
 matplotlib==3.11.2
-rapidocr==3.9.2; platform_system == "Windows"
+rapidocr==3.9.2
 onnxruntime==1.31.1
-streamlit==1.50.0
