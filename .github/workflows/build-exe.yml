@@ -6,16 +6,28 @@ on:
 permissions:
   contents: read
 
+# 連続push時に古いビルドを自動キャンセルしてキュー待ち・ランナー消費を削減
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
+      # Windows Defenderのリアルタイム保護による大量ファイルI/Oの遅延を防止（必ずcheckout前に実行）
+      - name: Exclude workspace from Windows Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pip"
+
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
@@ -25,14 +37,12 @@ jobs:
         shell: cmd
         run: build_exe.bat
 
-      - name: Create ZIP
-        shell: pwsh
-        run: Compress-Archive -Path dist/PotteryVolume_ScaleOCR -DestinationPath dist/PotteryVolume_ScaleOCR.zip -CompressionLevel Optimal
-
-      - name: Upload ZIP
-        uses: actions/upload-artifact@v4
+      # Compress-Archiveを廃止し、upload-artifactの並列ストリーミング圧縮・アップロードに直接任せる
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
         with:
           name: PotteryVolume_ScaleOCR-${{ github.sha }}
-          path: dist/PotteryVolume_ScaleOCR.zip
+          path: dist/PotteryVolume_ScaleOCR
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 6
+          retention-days: 14
