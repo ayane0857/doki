@@ -465,13 +465,8 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
             return
         try:
             import cv2
-            import numpy as np
 
             image = read_image(image_path)
-            success, encoded = cv2.imencode(".png", image)
-            if not success:
-                raise ValueError("画像を表示用に変換できません。")
-            image_data = base64.b64encode(encoded).decode("ascii")
             image_height, image_width = image.shape[:2]
         except (OSError, ValueError) as exc:
             messagebox.showerror("画像を開けません", str(exc), parent=root)
@@ -505,10 +500,6 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
         canvas.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
-        photo = tk.PhotoImage(data=image_data)
-        canvas.create_image(0, 0, image=photo, anchor="nw")
-        canvas.configure(scrollregion=(0, 0, image_width, image_height))
-        canvas.image = photo
 
         panel = ttk.Frame(window, padding=(12, 4))
         panel.grid(row=1, column=1, sticky="ns")
@@ -517,6 +508,13 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
         bar_candidates: list[object] = []
         overlay_ids: list[int] = []
         manual_points: list[tuple[float, float]] = []
+        display_scale = 1.0
+        zoom_scale: float | None = None
+        min_zoom_scale = 0.05
+        max_rendered_pixels = 16_000_000
+        display_photo: tk.PhotoImage | None = None
+        display_image_id = canvas.create_image(0, 0, anchor="nw")
+        resize_job: str | None = None
         ocr_summary_var = tk.StringVar(value="OCR読み取り中…")
         label_choice_var = tk.StringVar()
         value_var = tk.StringVar()
@@ -525,6 +523,67 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
         bar_length_var = tk.StringVar(value="—")
         scale_result_var = tk.StringVar(value="mm/px: —")
         points_status_var = tk.StringVar(value="自動検出の結果を確認してください。")
+
+        def display_point(x: float, y: float) -> tuple[float, float]:
+            return x * display_scale, y * display_scale
+
+        def image_point(x: float, y: float) -> tuple[float, float]:
+            return x / display_scale, y / display_scale
+
+        def refresh_display_image() -> None:
+            nonlocal display_scale, display_photo, resize_job
+            resize_job = None
+            available_width = canvas.winfo_width()
+            available_height = canvas.winfo_height()
+            if available_width <= 1 or available_height <= 1:
+                return
+            fit_scale = min(
+                1.0,
+                available_width / image_width,
+                available_height / image_height,
+            )
+            new_scale = fit_scale if zoom_scale is None else zoom_scale
+            if abs(new_scale - display_scale) < 1e-6 and display_photo is not None:
+                return
+            display_scale = new_scale
+            display_width = max(1, round(image_width * display_scale))
+            display_height = max(1, round(image_height * display_scale))
+            if display_scale == 1.0:
+                display_image = image
+            else:
+                display_image = cv2.resize(
+                    image, (display_width, display_height), interpolation=cv2.INTER_AREA
+                )
+            success, encoded = cv2.imencode(".png", display_image)
+            if not success:
+                raise ValueError("画像を表示用に変換できません。")
+            display_photo = tk.PhotoImage(
+                data=base64.b64encode(encoded).decode("ascii")
+            )
+            canvas.itemconfigure(display_image_id, image=display_photo)
+            canvas.configure(scrollregion=(0, 0, display_width, display_height))
+            redraw_overlay()
+
+        def set_zoom(scale: float | None) -> None:
+            nonlocal zoom_scale
+            zoom_scale = scale
+            refresh_display_image()
+
+        def zoom_in() -> None:
+            max_zoom_scale = math.sqrt(
+                max_rendered_pixels / (image_width * image_height)
+            )
+            if display_scale < max_zoom_scale:
+                set_zoom(min(display_scale * 1.25, max_zoom_scale))
+
+        def zoom_out() -> None:
+            if display_scale >= min_zoom_scale:
+                set_zoom(max(display_scale / 1.25, min_zoom_scale))
+
+        def schedule_display_refresh(_event: object | None = None) -> None:
+            nonlocal resize_job
+            if resize_job is None:
+                resize_job = window.after_idle(refresh_display_image)
 
         ttk.Label(panel, text="OCRで読み取った長さ").grid(
             row=0, column=0, sticky="w", pady=(4, 2)
@@ -606,12 +665,14 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
             for index, candidate in enumerate(bar_candidates):
                 color = "#e0a020" if index != bar_combo.current() else "#ff3030"
                 width = 1 if index != bar_combo.current() else 3
+                x1, y1 = display_point(candidate.x1, candidate.y1)
+                x2, y2 = display_point(candidate.x2, candidate.y2)
                 overlay_ids.append(
                     canvas.create_line(
-                        candidate.x1,
-                        candidate.y1,
-                        candidate.x2,
-                        candidate.y2,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                         fill=color,
                         width=width,
                     )
@@ -619,6 +680,8 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
             label = current_label()
             if label is not None:
                 x0, y0, x1, y1 = label.bounds
+                x0, y0 = display_point(x0, y0)
+                x1, y1 = display_point(x1, y1)
                 overlay_ids.append(
                     canvas.create_rectangle(
                         x0, y0, x1, y1, outline="#20c080", width=2
@@ -627,6 +690,8 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
             selected = current_bar()
             if selected is not None:
                 (x0, y0), (x1, y1) = selected
+                x0, y0 = display_point(x0, y0)
+                x1, y1 = display_point(x1, y1)
                 for x, y in ((x0, y0), (x1, y1)):
                     overlay_ids.append(
                         canvas.create_oval(
@@ -698,8 +763,10 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
             update_scale_result()
 
         def on_canvas_click(event: object) -> None:
-            x = float(canvas.canvasx(event.x))  # type: ignore[attr-defined]
-            y = float(canvas.canvasy(event.y))  # type: ignore[attr-defined]
+            x, y = image_point(
+                float(canvas.canvasx(event.x)),  # type: ignore[attr-defined]
+                float(canvas.canvasy(event.y)),  # type: ignore[attr-defined]
+            )
             if x < 0 or y < 0 or x >= image_width or y >= image_height:
                 return
             if len(manual_points) == 2:
@@ -753,12 +820,34 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
         value_var.trace_add("write", update_scale_result)
         unit_var.trace_add("write", update_scale_result)
         canvas.bind("<Button-1>", on_canvas_click)
+        canvas_frame.bind("<Configure>", schedule_display_refresh)
         ttk.Button(panel, text="mm/pxとして反映", command=apply_scale).grid(
             row=11, column=0, sticky="ew", pady=3
         )
         ttk.Button(panel, text="閉じる", command=window.destroy).grid(
             row=12, column=0, sticky="ew", pady=3
         )
+        zoom_frame = ttk.Frame(panel)
+        zoom_frame.grid(row=13, column=0, sticky="ew", pady=(10, 3))
+        ttk.Label(zoom_frame, text="画像表示").grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Button(
+            zoom_frame, text="全体表示", command=lambda: set_zoom(None)
+        ).grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=2)
+        ttk.Button(
+            zoom_frame, text="原寸", command=lambda: set_zoom(1.0)
+        ).grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=2)
+        ttk.Button(zoom_frame, text="拡大", command=zoom_in).grid(
+            row=2, column=0, sticky="ew", padx=(0, 2)
+        )
+        ttk.Button(zoom_frame, text="縮小", command=zoom_out).grid(
+            row=2, column=1, sticky="ew", padx=(2, 0)
+        )
+        zoom_frame.columnconfigure(0, weight=1)
+        zoom_frame.columnconfigure(1, weight=1)
+        window.update_idletasks()
+        refresh_display_image()
 
         def finish_detection(labels: list[object], bars: list[object]) -> None:
             if not window.winfo_exists():
