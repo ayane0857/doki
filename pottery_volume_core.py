@@ -93,6 +93,18 @@ def read_image(path: Path) -> np.ndarray:
     return image
 
 
+def write_image(path: Path, image: np.ndarray) -> None:
+    """Write an image to a Unicode path on Windows and other platforms."""
+    ext = path.suffix if path.suffix else ".png"
+    success, encoded = cv2.imencode(ext, image)
+    if not success:
+        raise ValueError(f"画像をエンコードできません: {path}")
+    try:
+        encoded.tofile(str(path))
+    except OSError as exc:
+        raise ValueError(f"画像を保存できません: {path}") from exc
+
+
 def remove_small_components(binary: np.ndarray, min_area: int = 5) -> np.ndarray:
     """Remove tiny isolated marks while retaining thin vessel outlines."""
     components = label(binary > 0, connectivity=2)
@@ -129,7 +141,7 @@ def detect_axis(
     for local_x in range(center_band.shape[1]):
         col = center_band[:, local_x]
         indices = np.flatnonzero(col)
-        if not len(indices):
+        if len(indices) == 0:
             continue
         gaps = np.flatnonzero(np.diff(indices) > 1)
         starts = np.r_[indices[0], indices[gaps + 1]]
@@ -411,7 +423,7 @@ def compute_volumes(
     start_index = int(np.searchsorted(y, level, side="left"))
     y_fill = y[start_index:]
     rin_fill = rin[start_index:]
-    if not len(y_fill):
+    if len(y_fill) == 0:
         capacity_px3 = 0.0
     else:
         if y_fill[0] > level:
@@ -485,6 +497,7 @@ def compute_volumes(
                 "wall_volume_cm3": wall_px3 * volume_scale / 1000.0,
                 "wall_volume_ml": wall_px3 * volume_scale / 1000.0,
                 "pappus_wall_volume_cm3": pappus_px3 * volume_scale / 1000.0,
+                "pappus_wall_volume_ml": pappus_px3 * volume_scale / 1000.0,
             }
         )
     return result
@@ -536,10 +549,10 @@ def visualize(
         (0, 180, 255),
         1,
     )
-    cv2.imwrite(str(debug_dir / "detection_overlay.png"), overlay)
-    cv2.imwrite(str(debug_dir / "section_mask.png"), section.mask)
+    write_image(debug_dir / "detection_overlay.png", overlay)
+    write_image(debug_dir / "section_mask.png", section.mask)
     if section.closed_mask is not None:
-        cv2.imwrite(str(debug_dir / "section_closed.png"), section.closed_mask)
+        write_image(debug_dir / "section_closed.png", section.closed_mask)
 
     factor = scale if scale is not None else 1.0
     axis_label = "radius (mm)" if scale is not None else "radius (px)"

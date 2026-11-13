@@ -1,0 +1,38 @@
+{
+  "units": {
+    "length": "mm",
+    "volume": "mm3"
+  },
+  "vessel_height": 50.440000000000005,
+  "mouth_diameter": 90.21257142857142,
+  "maximum_diameter": 96.48228571428567,
+  "liquid_level_y_px": 48.0,
+  "capacity": 212201.71921837758,
+  "wall_volume": 63513.5430453637,
+  "pappus_wall_volume": 62937.25275941995,
+  "pappus_difference_percent": 0.9073502410850292,
+  "section_area": 291.3077142857143,
+  "section_centroid_radius": 34.38554624564893,
+  "mm_per_px": 0.13,
+  "capacity_cm3": 212.20171921837758,
+  "capacity_ml": 212.20171921837758,
+  "wall_volume_cm3": 63.513543045363704,
+  "wall_volume_ml": 63.513543045363704,
+  "pappus_wall_volume_cm3": 62.93725275941995,
+  "pappus_wall_volume_ml": 62.93725275941995,
+  "input": "C:\\Users\\shenw_gh376la\\github\\doki\\スクリーンショット 2026-11-10 215707.png",
+  "axis_x_px": 364.0,
+  "section_roi": [
+    364,
+    0,
+    749,
+    473
+  ],
+  "section_mode": "lines",
+  "threshold_method": "otsu",
+  "top_y_px": 48.0,
+  "bottom_y_px": 436.0,
+  "warnings": [
+    "断面の閉領域を検出できず、線輪郭の追跡モードに切り替えました。"
+  ]
+}

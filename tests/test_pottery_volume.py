@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -16,10 +17,12 @@ from pottery_volume import (
     extract_profiles,
     extract_section,
     main,
+    read_image,
     remove_small_components,
     resolve_scale,
+    write_image,
 )
-from pottery_volume_gui import pixel_distance
+from pottery_volume_gui import build_tsv_row, build_tsv_table, pixel_distance
 
 
 def run_pipeline(image: np.ndarray) -> tuple[dict, float]:
@@ -244,3 +247,69 @@ def test_liquid_level_rejects_non_finite_values(liquid_level_y):
     section = extract_section(binary, 180)
     with pytest.raises(ValueError, match="液面 y"):
         extract_profiles(section, 180, liquid_level_y=liquid_level_y)
+
+
+def test_read_and_write_image_unicode_path(tmp_path: Path):
+    """Writing and reading images using non-ASCII paths must succeed on Windows."""
+    japanese_dir = tmp_path / "土器実測図_テスト出力"
+    japanese_dir.mkdir()
+    target_file = japanese_dir / "実測図_サンプル.png"
+
+    sample = np.full((30, 40, 3), 200, dtype=np.uint8)
+    sample[5:15, 5:15] = [0, 0, 255]
+    write_image(target_file, sample)
+    assert target_file.is_file()
+
+    loaded = read_image(target_file)
+    assert loaded.shape == (30, 40, 3)
+    np.testing.assert_array_equal(loaded, sample)
+
+
+def test_build_tsv_row_and_table_for_excel():
+    mock_info = {
+        "image_name": "pottery_01.png",
+        "result": {
+            "units": {"length": "mm", "volume": "cm³"},
+            "vessel_height": 120.5,
+            "mouth_diameter": 95.2,
+            "maximum_diameter": 110.8,
+            "capacity_ml": 450.25,
+            "capacity_cm3": 450.25,
+            "wall_volume_ml": 85.12,
+            "wall_volume_cm3": 85.12,
+            "pappus_wall_volume_ml": 84.95,
+            "pappus_difference_percent": 0.20,
+            "scale_mm_per_px": 0.25,
+        },
+    }
+
+    # データ行のみ
+    row_only = build_tsv_row(mock_info, include_header=False)
+    cols = row_only.split("\t")
+    assert cols[0] == "pottery_01.png"
+    assert cols[1] == "120.50"
+    assert cols[2] == "95.20"
+    assert cols[3] == "110.80"
+    assert cols[4] == "450.25"
+    assert cols[5] == "85.12"
+    assert cols[6] == "535.37"  # 全外形体積
+    assert cols[7] == "84.95"
+    assert cols[8] == "0.20"
+    assert cols[9] == "0.2500"
+
+    # ヘッダー付き
+    with_header = build_tsv_row(mock_info, include_header=True)
+    lines = with_header.split("\n")
+    assert len(lines) == 2
+    assert "画像ファイル\t器高(mm)" in lines[0]
+    assert lines[1] == row_only
+
+    # 縦の表
+    table = build_tsv_table(mock_info)
+    table_lines = table.split("\n")
+    assert table_lines[0] == "項目\t値\t単位"
+    assert "画像ファイル\tpottery_01.png" in table_lines[1]
+    assert any("器高\t120.50\tmm" in line for line in table_lines)
+    assert any("内腔容量\t450.25\tmL" in line for line in table_lines)
+    assert any("全外形体積\t535.37\tmL" in line for line in table_lines)
+

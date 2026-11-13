@@ -171,8 +171,6 @@ def _print_result(
     print(f"器高: {result['vessel_height']:.2f} {unit}")
     print(f"口径: {result['mouth_diameter']:.2f} {unit}")
     print(f"最大径: {result['maximum_diameter']:.2f} {unit}")
-    print(f"容量: {result['capacity']:.2f} {volume_unit}")
-    print(f"器壁体積: {result['wall_volume']:.2f} {volume_unit}")
     if "capacity_ml" in result:
         print(
             f"容量: {result['capacity_cm3']:.2f} cm³ ({result['capacity_ml']:.2f} mL)"
@@ -180,9 +178,15 @@ def _print_result(
         print(
             f"器壁体積: {result['wall_volume_cm3']:.2f} cm³ ({result['wall_volume_ml']:.2f} mL)"
         )
-    print(
-        f"パップス検算: {result['pappus_wall_volume']:.2f} {volume_unit} (差 {result['pappus_difference_percent']:.2f}%)"
-    )
+        print(
+            f"パップス検算: {result['pappus_wall_volume_cm3']:.2f} cm³ ({result['pappus_wall_volume_ml']:.2f} mL) (差 {result['pappus_difference_percent']:.2f}%)"
+        )
+    else:
+        print(f"容量: {result['capacity']:.2f} {volume_unit}")
+        print(f"器壁体積: {result['wall_volume']:.2f} {volume_unit}")
+        print(
+            f"パップス検算: {result['pappus_wall_volume']:.2f} {volume_unit} (差 {result['pappus_difference_percent']:.2f}%)"
+        )
     print(f"断面抽出モード: {section_mode}")
     for warning in warnings:
         print(f"警告: {warning}", file=sys.stderr)

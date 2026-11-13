@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -182,11 +183,15 @@ def detect_horizontal_scale_bars(
                     possible.append((x_distance + vertical_gap * 0.5, tick_x))
             return min(possible)[1] if possible else x
 
+        sx1 = snap_endpoint(candidate.x1)
+        sx2 = snap_endpoint(candidate.x2)
+        if sx2 < sx1:
+            sx1, sx2 = sx2, sx1
         refined.append(
             ScaleBarCandidate(
-                snap_endpoint(candidate.x1),
+                sx1,
                 candidate.y1,
-                snap_endpoint(candidate.x2),
+                sx2,
                 candidate.y2,
             )
         )
@@ -222,3 +227,115 @@ def rank_scale_bars(
         return bar.pixels * (0.7 + 0.5 * vertical + 0.3 * endpoint)
 
     return sorted(bars, key=score, reverse=True)
+
+
+def extract_scale_from_image(
+    image: np.ndarray,
+) -> tuple[ScaleTextCandidate | None, ScaleBarCandidate | None, float | None]:
+    """目盛り画像から (best_label, best_bar, mm_per_px) を自動抽出する。"""
+    try:
+        labels = recognize_scale_text(image)
+    except Exception:
+        labels = []
+    try:
+        bars = detect_horizontal_scale_bars(image)
+    except Exception:
+        bars = []
+
+    best_label = labels[0] if labels else None
+    ranked_bars = rank_scale_bars(bars, best_label, image.shape)
+    best_bar = ranked_bars[0] if ranked_bars else None
+
+    mm_per_px = None
+    if best_label and best_bar and best_bar.pixels > 0:
+        mm_per_px = best_label.length_mm / best_bar.pixels
+
+    return best_label, best_bar, mm_per_px
+
+
+def classify_pottery_and_scale(
+    path_a: str | Path,
+    path_b: str | Path,
+) -> tuple[Path, Path]:
+    """2つの画像パスから (pottery_image_path, scale_image_path) を判定して返す。"""
+    from pottery_volume_core import read_image
+
+    p_a = Path(path_a)
+    p_b = Path(path_b)
+
+    def compute_scale_score(path: Path) -> float:
+        try:
+            image = read_image(path)
+        except Exception:
+            return 0.0
+
+        h, w = image.shape[:2]
+        aspect_ratio = w / max(1.0, float(h))
+        score = 0.0
+
+        # 1. OCR単位付きテキスト（強力な目盛り特徴）
+        try:
+            labels = recognize_scale_text(image)
+        except Exception:
+            labels = []
+        if labels:
+            score += 35.0 + sum(label.confidence * 15.0 for label in labels)
+
+        # 2. 水平スケールバーの検出
+        try:
+            bars = detect_horizontal_scale_bars(image)
+        except Exception:
+            bars = []
+        if bars:
+            score += 6.0
+            if labels:
+                ranked = rank_scale_bars(bars, labels[0], image.shape)
+                if ranked:
+                    score += 12.0
+
+        # 3. アスペクト比（目盛りは横長、土器実測図は縦長〜正方形寄り）
+        if aspect_ratio >= 3.0:
+            score += 14.0
+        elif aspect_ratio >= 2.0:
+            score += 7.0
+        elif aspect_ratio < 1.4:
+            score -= 10.0
+
+        # 4. ファイル名の補助判定
+        name_lower = path.name.lower()
+        scale_keywords = ("scale", "目盛", "bar", "ruler", "cm", "mm")
+        pottery_keywords = ("pottery", "doki", "土器", "vessel", "section", "実測")
+        if any(kw in name_lower for kw in scale_keywords):
+            score += 10.0
+        if any(kw in name_lower for kw in pottery_keywords):
+            score -= 10.0
+
+        # 枝番（-2 や _2 は目盛り、-1 や _1 は土器に用いられやすい傾向）
+        if re.search(r"[-_]2\b", name_lower):
+            score += 4.0
+        elif re.search(r"[-_]1\b", name_lower):
+            score -= 4.0
+
+        return score
+
+    score_a = compute_scale_score(p_a)
+    score_b = compute_scale_score(p_b)
+
+    if score_a > score_b:
+        return p_b, p_a  # bが土器、aが目盛り
+    elif score_b > score_a:
+        return p_a, p_b  # aが土器、bが目盛り
+    else:
+        # 同点の場合は面積（小さい方を目盛りとみなす）
+        try:
+            img_a = read_image(p_a)
+            img_b = read_image(p_b)
+            area_a = img_a.shape[0] * img_a.shape[1]
+            area_b = img_b.shape[0] * img_b.shape[1]
+            if area_a < area_b:
+                return p_b, p_a
+            else:
+                return p_a, p_b
+        except Exception:
+            return p_a, p_b
+
