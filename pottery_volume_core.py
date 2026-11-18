@@ -10,6 +10,8 @@ from typing import Any
 
 import cv2
 import numpy as np
+from shapely.geometry import Polygon
+from shapely.validation import explain_validity
 from scipy.integrate import trapezoid
 from scipy.signal import savgol_filter
 from skimage.measure import label, regionprops
@@ -36,6 +38,69 @@ class Profiles:
     bottom_y_px: float
     liquid_y_px: float
     warnings: list[str] = field(default_factory=list)
+
+
+def profile_section_polygon(
+    profiles: Profiles,
+    axis_x: float,
+) -> Polygon:
+    """Build and validate the right-side vessel wall polygon from radial profiles."""
+    if len(profiles.y_px) < 2:
+        raise ValueError("断面輪郭をPolygonにするには2行以上必要です。")
+    if not np.all(np.isfinite(profiles.r_in_px)) or not np.all(np.isfinite(profiles.r_out_px)):
+        raise ValueError("断面輪郭に無効な半径があります。")
+    if len(profiles.r_in_px) != len(profiles.y_px) or len(profiles.r_out_px) != len(profiles.y_px):
+        raise ValueError("断面輪郭の行数が一致しません。")
+
+    inner = [
+        (axis_x + float(radius), float(y))
+        for y, radius in zip(profiles.y_px, profiles.r_in_px)
+    ]
+    outer = [
+        (axis_x + float(radius), float(y))
+        for y, radius in zip(profiles.y_px, profiles.r_out_px)
+    ]
+    polygon = Polygon(inner + list(reversed(outer)))
+    if polygon.is_empty or polygon.area <= 0:
+        raise ValueError("断面Polygonの面積がありません。")
+    if not polygon.is_valid:
+        raise ValueError(f"断面Polygonが無効です: {explain_validity(polygon)}")
+    return polygon
+
+
+def apply_profile_overrides(
+    profiles: Profiles,
+    inner_radius_px: np.ndarray | None = None,
+    outer_radius_px: np.ndarray | None = None,
+    warnings: list[str] | None = None,
+) -> Profiles:
+    """Create a profiles copy with manually corrected inner/outer radii."""
+    r_in = profiles.r_in_px.copy()
+    r_out = profiles.r_out_px.copy()
+    if inner_radius_px is not None:
+        if inner_radius_px.shape != r_in.shape:
+            raise ValueError("修正した内面輪郭の行数が自動輪郭と一致しません。")
+        r_in = np.asarray(inner_radius_px, dtype=float).copy()
+    if outer_radius_px is not None:
+        if outer_radius_px.shape != r_out.shape:
+            raise ValueError("修正した外面輪郭の行数が自動輪郭と一致しません。")
+        r_out = np.asarray(outer_radius_px, dtype=float).copy()
+    if not np.all(np.isfinite(r_in)) or not np.all(np.isfinite(r_out)):
+        raise ValueError("輪郭の修正値に無効な数値があります。")
+    r_in = np.maximum(r_in, 0.0)
+    r_out = np.maximum(r_out, r_in + 0.25)
+    profile_warnings = list(profiles.warnings)
+    if warnings:
+        profile_warnings.extend(warnings)
+    return Profiles(
+        profiles.y_px.copy(),
+        r_in,
+        r_out,
+        profiles.top_y_px,
+        profiles.bottom_y_px,
+        profiles.liquid_y_px,
+        profile_warnings,
+    )
 
 
 def parse_crop(value: str) -> tuple[int, int, int, int]:
@@ -432,40 +497,11 @@ def compute_volumes(
         capacity_px3 = math.pi * float(trapezoid(rin_fill**2, y_fill))
     wall_px3 = math.pi * float(trapezoid(rout**2 - rin**2, y))
 
-    if np.any(section_mask):
-        region_labels = label(section_mask > 0, connectivity=2)
-        props = regionprops(region_labels)
-        largest = max(props, key=lambda item: item.area)
-        largest_mask = region_labels == largest.label
-        mask_rows = np.flatnonzero(np.any(largest_mask, axis=1))
-        area_px2 = 0.0
-        first_moment_px3 = 0.0
-        side_correction = 1.0 if section_mode == "filled" else 0.0
-        for row in mask_rows:
-            xs = np.flatnonzero(largest_mask[row])
-            row_area = float(len(xs)) + side_correction
-            row_centroid_x = (float(xs[0]) + float(xs[-1])) / 2.0
-            area_px2 += row_area
-            first_moment_px3 += row_area * (row_centroid_x - axis_x)
-        # The flood-filled interior omits the top and bottom contour strokes too.
-        # Add those end rows from the already interpolated profiles when needed.
-        for row in (int(round(profiles.top_y_px)), int(round(profiles.bottom_y_px))):
-            if (
-                row < 0
-                or row >= section_mask.shape[0]
-                or (len(mask_rows) and row in mask_rows)
-            ):
-                continue
-            radius_in = _profile_at(profiles.y_px, rin, float(row))
-            radius_out = _profile_at(profiles.y_px, rout, float(row))
-            row_area = max(0.0, radius_out - radius_in)
-            area_px2 += row_area
-            first_moment_px3 += row_area * (radius_in + radius_out) / 2.0
-        centroid_radius_px = first_moment_px3 / area_px2 if area_px2 else 0.0
-        centroid_x_px = axis_x + centroid_radius_px
-        pappus_px3 = 2.0 * math.pi * centroid_radius_px * area_px2
-    else:
-        area_px2 = centroid_x_px = centroid_radius_px = pappus_px3 = 0.0
+    section_polygon = profile_section_polygon(profiles, axis_x)
+    area_px2 = float(section_polygon.area)
+    centroid_x_px = float(section_polygon.centroid.x)
+    centroid_radius_px = centroid_x_px - axis_x
+    pappus_px3 = 2.0 * math.pi * centroid_radius_px * area_px2
     diff_pct = abs(pappus_px3 - wall_px3) / wall_px3 * 100 if wall_px3 else 0.0
     px_scale = mm_per_px if mm_per_px is not None else 1.0
     unit = "mm" if mm_per_px is not None else "px"

@@ -10,7 +10,18 @@ from typing import Callable
 
 from pottery_scale import classify_pottery_and_scale, extract_scale_from_image
 from pottery_volume_cli import analyze
-from pottery_volume_core import read_image
+from pottery_volume_core import (
+    apply_profile_overrides,
+    binarize_image,
+    compute_volumes,
+    detect_axis,
+    extract_profiles,
+    extract_section,
+    parse_crop,
+    profile_section_polygon,
+    read_image,
+    remove_small_components,
+)
 
 
 def pixel_distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:
@@ -32,7 +43,6 @@ def build_tsv_row(info: dict[str, object], include_header: bool = False) -> str:
         volume_unit = "mL"
 
     headers = [
-        "タイトル",
         "画像ファイル",
         f"器高({length_unit})",
         f"口径({length_unit})",
@@ -62,7 +72,6 @@ def build_tsv_row(info: dict[str, object], include_header: bool = False) -> str:
             else ""
         )
         data = [
-            str(info.get("title", "")),
             image_name,
             vessel_height,
             mouth_dia,
@@ -81,7 +90,6 @@ def build_tsv_row(info: dict[str, object], include_header: bool = False) -> str:
         pappus = f"{res['pappus_wall_volume']:.2f}"
         diff = f"{res['pappus_difference_percent']:.2f}"
         data = [
-            str(info.get("title", "")),
             image_name,
             vessel_height,
             mouth_dia,
@@ -110,7 +118,6 @@ def build_tsv_table(info: dict[str, object]) -> str:
 
     rows = [
         ("項目", "値", "単位"),
-        ("タイトル", str(info.get("title", "")), ""),
         ("画像ファイル", image_name, ""),
         ("器高", f"{res['vessel_height']:.2f}", length_unit),
         ("口径", f"{res['mouth_diameter']:.2f}", length_unit),
@@ -2123,6 +2130,9 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
 
     # History Management
     last_analysis_info: dict[str, object] | None = None
+    last_profiles = None
+    last_axis_x: float | None = None
+    last_section_mode = "auto"
     history_records: dict[int, dict[str, str]] = {}
     next_history_id = 0
     history_window: tk.Toplevel | None = None
@@ -2605,8 +2615,272 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
 
     show_log_text("画像を選択して「体積・容量を計算する」を押すと結果が表示されます。")
 
+    def open_profile_editor() -> None:
+        nonlocal last_analysis_info, last_profiles, last_axis_x, last_section_mode
+        if last_analysis_info is None:
+            messagebox.showerror(
+                "輪郭が未作成です",
+                "先に「体積・容量を計算する」を実行してください。",
+                parent=root,
+            )
+            return
+
+        import base64
+        import tkinter as tk
+        import numpy as np
+        import cv2
+        from tkinter import ttk
+
+        image_path = Path(str(last_analysis_info["image_path"]))
+        image = read_image(image_path)
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            binary, _ = binarize_image(gray, adaptive_var.get())
+            binary = remove_small_components(binary, int(min_area_var.get()))
+            override_axis = float(axis_var.get()) if axis_var.get().strip() else None
+            axis_x, _ = detect_axis(binary, override_axis)
+            crop = parse_crop(crop_var.get()) if crop_var.get().strip() else None
+            liquid_level = float(liquid_var.get()) if liquid_var.get().strip() else None
+            section = extract_section(
+                binary,
+                axis_x,
+                crop,
+                int(kernel_var.get()),
+                profile_mode_var.get(),
+            )
+            profiles = extract_profiles(
+                section,
+                axis_x,
+                liquid_level,
+                int(smooth_var.get()),
+            )
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("輪郭を作成できません", str(exc), parent=window if "window" in locals() else root)
+            return
+        last_profiles = profiles
+        last_axis_x = axis_x
+        last_section_mode = section.mode
+        success, encoded = cv2.imencode(".png", image)
+        if not success:
+            messagebox.showerror("画像を開けません", "編集用画像を作成できません。", parent=root)
+            return
+
+        window = tk.Toplevel(root)
+        window.title("輪郭の手動修正")
+        window.geometry("1120x760")
+        window.minsize(760, 520)
+        window.transient(root)
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            window,
+            text="内面（赤）・外面（青）の点をドラッグして修正し、「確定して再計算」を押してください。",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=8)
+
+        canvas_frame = ttk.Frame(window)
+        canvas_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=4)
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas = tk.Canvas(canvas_frame, background="#303030", highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        canvas_frame.rowconfigure(0, weight=1)
+
+        panel = ttk.Frame(window, padding=(12, 4))
+        panel.grid(row=1, column=1, sticky="ns")
+        status_var = tk.StringVar(value="輪郭上の点をドラッグできます。")
+
+        image_height, image_width = image.shape[:2]
+        display_scale = min(900.0 / image_width, 620.0 / image_height)
+        display_width = int(round(image_width * display_scale))
+        display_height = int(round(image_height * display_scale))
+        photo = tk.PhotoImage(data=base64.b64encode(encoded).decode("ascii"))
+        canvas.config(width=display_width, height=display_height)
+        canvas.create_image(0, 0, image=photo, anchor="nw")
+        canvas.image = photo
+
+        r_in = last_profiles.r_in_px.copy()
+        r_out = last_profiles.r_out_px.copy()
+        y_values = last_profiles.y_px.copy()
+        step = max(1, len(y_values) // 100)
+        line_ids: list[int] = []
+        point_ids: list[tuple[int, int, int, str]] = []
+
+        def to_canvas(x: float, y: float) -> tuple[float, float]:
+            return x * display_scale, y * display_scale
+
+        def redraw() -> None:
+            nonlocal line_ids, point_ids
+            for item_id in line_ids:
+                canvas.delete(item_id)
+            for item_id, _y_index, _curve, _marker in point_ids:
+                canvas.delete(item_id)
+            line_ids = []
+            point_ids = []
+
+            inner_points: list[float] = []
+            outer_points: list[float] = []
+            for y, inner, outer in zip(y_values, r_in, r_out):
+                ix, iy = to_canvas(last_axis_x + inner, y)
+                ox, oy = to_canvas(last_axis_x + outer, y)
+                inner_points.extend((ix, iy))
+                outer_points.extend((ox, oy))
+            line_ids.append(
+                canvas.create_line(*inner_points, fill="#EF4444", width=2)
+            )
+            line_ids.append(
+                canvas.create_line(*outer_points, fill="#2563EB", width=2)
+            )
+            for y_index in range(0, len(y_values), step):
+                y = float(y_values[y_index])
+                ix, iy = to_canvas(last_axis_x + r_in[y_index], y)
+                ox, oy = to_canvas(last_axis_x + r_out[y_index], y)
+                inner_id = canvas.create_oval(ix - 4, iy - 4, ix + 4, iy + 4, fill="#EF4444", outline="#991B1B")
+                outer_id = canvas.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill="#2563EB", outline="#1E3A8A")
+                point_ids.append((inner_id, y_index, "inner", ""))
+                point_ids.append((outer_id, y_index, "outer", ""))
+
+        active: dict[str, object] = {"index": None, "curve": None}
+
+        def on_press(event: object) -> None:
+            canvas_x = float(canvas.canvasx(event.x))  # type: ignore[attr-defined]
+            canvas_y = float(canvas.canvasy(event.y))  # type: ignore[attr-defined]
+            candidates: list[tuple[float, int, str]] = []
+            for _item_id, y_index, curve, _marker in point_ids:
+                y = float(y_values[y_index])
+                radius = r_in[y_index] if curve == "inner" else r_out[y_index]
+                px, py = to_canvas(last_axis_x + radius, y)
+                candidates.append((math.hypot(canvas_x - px, canvas_y - py), y_index, curve))
+            if not candidates:
+                return
+            distance, y_index, curve = min(candidates)
+            if distance > 18:
+                status_var.set("輪郭上の点を選んでください。")
+                return
+            active["index"] = y_index
+            active["curve"] = curve
+            status_var.set("内面輪郭を修正中。" if curve == "inner" else "外面輪郭を修正中。")
+
+        def on_drag(event: object) -> None:
+            y_index = active["index"]
+            curve = active["curve"]
+            if y_index is None or curve is None:
+                return
+            canvas_x = float(canvas.canvasx(event.x))  # type: ignore[attr-defined]
+            radius = max(0.0, canvas_x / display_scale - last_axis_x)
+            if curve == "inner":
+                r_in[int(y_index)] = min(radius, r_out[int(y_index)] - 0.25)
+            else:
+                r_out[int(y_index)] = max(radius, r_in[int(y_index)] + 0.25)
+            redraw()
+
+        canvas.bind("<Button-1>", on_press)
+        canvas.bind("<B1-Motion>", on_drag)
+
+        def reset_profiles() -> None:
+            r_in[:] = last_profiles.r_in_px
+            r_out[:] = last_profiles.r_out_px
+            redraw()
+            status_var.set("自動検出された輪郭に戻しました。")
+
+        def confirm_profiles() -> None:
+            manual_profiles = apply_profile_overrides(
+                last_profiles,
+                r_in,
+                r_out,
+                ["輪郭を手動修正して確定しました。"],
+            )
+            try:
+                profile_section_polygon(manual_profiles, last_axis_x)
+            except ValueError as exc:
+                messagebox.showerror("輪郭を確定できません", str(exc), parent=window)
+                return
+            existing = dict(last_analysis_info)
+            mm_per_px = existing["result"].get("scale_mm_per_px")
+            manual_result = compute_volumes(
+                manual_profiles,
+                np.zeros((1, 1), dtype=np.uint8),
+                last_axis_x,
+                mm_per_px,
+                last_section_mode,
+            )
+            manual_result.update(
+                {
+                    "input": existing["result"].get("input"),
+                    "axis_x_px": last_axis_x,
+                    "section_roi": existing["result"].get("section_roi"),
+                    "section_mode": last_section_mode,
+                    "top_y_px": manual_profiles.top_y_px,
+                    "bottom_y_px": manual_profiles.bottom_y_px,
+                    "warnings": manual_profiles.warnings,
+                    "profile_source": "manual",
+                }
+            )
+            existing["result"] = manual_result
+            last_analysis_info = existing
+            add_history_record(manual_result, image_path)
+
+            is_mm = "capacity_ml" in manual_result
+            length_unit = manual_result["units"]["length"]
+            volume_unit = manual_result["units"]["volume"]
+            metric_height_var.set(f"{manual_result['vessel_height']:.2f} {length_unit}")
+            metric_mouth_var.set(f"{manual_result['mouth_diameter']:.2f} {length_unit}")
+            metric_max_dia_var.set(f"{manual_result['maximum_diameter']:.2f} {length_unit}")
+            if is_mm:
+                kpi_capacity_var.set(f"{manual_result['capacity_ml']:.2f}")
+                kpi_capacity_unit_var.set("mL")
+                kpi_wall_var.set(f"{manual_result['wall_volume_ml']:.2f}")
+                kpi_wall_unit_var.set("mL")
+                metric_total_vol_var.set(
+                    f"{manual_result['capacity_ml'] + manual_result['wall_volume_ml']:.2f} mL"
+                )
+                metric_pappus_var.set(
+                    f"{manual_result['pappus_wall_volume_ml']:.2f} mL "
+                    f"({manual_result['pappus_difference_percent']:.2f}%)"
+                )
+            else:
+                kpi_capacity_var.set(f"{manual_result['capacity']:.2f}")
+                kpi_capacity_unit_var.set(volume_unit)
+                kpi_wall_var.set(f"{manual_result['wall_volume']:.2f}")
+                kpi_wall_unit_var.set(volume_unit)
+                metric_total_vol_var.set(
+                    f"{manual_result['capacity'] + manual_result['wall_volume']:.2f} "
+                    f"{volume_unit}"
+                )
+                metric_pappus_var.set(
+                    f"{manual_result['pappus_wall_volume']:.2f} {volume_unit} "
+                    f"({manual_result['pappus_difference_percent']:.2f}%)"
+                )
+            show_log_text(
+                "輪郭を手動修正して再計算しました。\n"
+                f"内腔容量: {manual_result['capacity_ml']:.2f} mL\n"
+                f"器壁体積: {manual_result['wall_volume_ml']:.2f} mL"
+                if is_mm
+                else
+                "輪郭を手動修正して再計算しました。\n"
+                f"内腔容量: {manual_result['capacity']:.2f} {volume_unit}\n"
+                f"器壁体積: {manual_result['wall_volume']:.2f} {volume_unit}"
+            )
+            set_status("輪郭修正を確定し再計算しました。", "success")
+            window.destroy()
+
+        ttk.Label(panel, textvariable=status_var, wraplength=220).pack(pady=(0, 12))
+        ttk.Label(panel, text="赤: 内面輪郭").pack(anchor="w")
+        ttk.Label(panel, text="青: 外面輪郭").pack(anchor="w")
+        ttk.Button(panel, text="確定して再計算", command=confirm_profiles).pack(
+            fill="x", pady=(18, 4)
+        )
+        ttk.Button(panel, text="自動輪郭に戻す", command=reset_profiles).pack(
+            fill="x", pady=4
+        )
+        ttk.Button(panel, text="閉じる", command=window.destroy).pack(
+            fill="x", pady=4
+        )
+
+        redraw()
+
     def calculate() -> None:
-        nonlocal last_analysis_info
+        nonlocal last_analysis_info, last_profiles, last_axis_x, last_section_mode
         image_text = image_var.get().strip().strip('"')
         if not image_text:
             messagebox.showerror(
@@ -2680,7 +2954,10 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
             with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
                 stderr_buffer
             ):
-                _, result, _, _ = analyze(command_args)
+                _, result, section_mode, _ = analyze(command_args)
+                last_profiles = None
+                last_axis_x = None
+                last_section_mode = section_mode
 
             current_title = measurement_title_var.get().strip()
             if not current_title or title_is_automatic:
@@ -2782,9 +3059,14 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
     history_button.grid(row=0, column=1, sticky="ns")
     ttk.Button(
         action_bar,
+        text="輪郭を手動修正",
+        command=open_profile_editor,
+    ).grid(row=0, column=2, sticky="ns", padx=(4, 0))
+    ttk.Button(
+        action_bar,
         text="ライセンス表記",
         command=open_license_notice,
-    ).grid(row=0, column=2, sticky="ns", padx=(4, 0))
+    ).grid(row=0, column=3, sticky="ns", padx=(4, 0))
 
     root.bind("<Return>", lambda _event: calculate())
     root.mainloop()

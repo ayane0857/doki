@@ -52,6 +52,13 @@ ONNX Runtime
   https://onnxruntime.ai/
   https://github.com/microsoft/onnxruntime
 
+Shapely
+  Version: 2.2.0
+  License: BSD-3-Clause
+  Includes GEOS geometry engine usage under LGPL-2.1-or-later
+  https://shapely.readthedocs.io/
+  https://github.com/shapely/shapely
+
 Pillow
   License: MIT-CMU
   https://python-pillow.org/

@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from pottery_volume import (
+    apply_profile_overrides,
     binarize_image,
     compute_volumes,
     detect_axis,
@@ -21,6 +22,7 @@ from pottery_volume import (
     remove_small_components,
     resolve_scale,
     write_image,
+    profile_section_polygon,
 )
 from pottery_volume_gui import build_tsv_row, build_tsv_table, pixel_distance
 
@@ -159,6 +161,46 @@ def test_scale_conversion_is_cubic_and_reports_ml():
 def test_pixel_distance_returns_image_distance():
     """The GUI measurement helper reports the Euclidean pixel distance."""
     assert pixel_distance((10, 20), (13, 24)) == pytest.approx(5)
+
+
+def test_profile_section_polygon_is_valid_and_reports_shapely_centroid():
+    """Shapely should validate the profile polygon and compute its wall centroid."""
+    image = cylinder_shell()
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary, _ = binarize_image(gray)
+    section = extract_section(binary, 180)
+    profiles = extract_profiles(section, 180)
+
+    polygon = profile_section_polygon(profiles, 180)
+    result = compute_volumes(profiles, section.mask, 180, section_mode=section.mode)
+
+    assert polygon.is_valid
+    assert polygon.area == pytest.approx(result["section_area"], rel=0.02)
+    assert result["section_centroid_radius"] == pytest.approx(
+        float(polygon.centroid.x - 180), rel=0.02
+    )
+
+
+def test_manual_profile_overrides_recompute_wall_volume():
+    """A confirmed manual profile should replace the automatic radii."""
+    image = cylinder_shell()
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary, _ = binarize_image(gray)
+    section = extract_section(binary, 180)
+    profiles = extract_profiles(section, 180)
+
+    inner = profiles.r_in_px.copy()
+    outer = profiles.r_out_px.copy()
+    inner[:] = 50.0
+    outer[:] = 60.0
+    manual = apply_profile_overrides(profiles, inner, outer)
+    result = compute_volumes(manual, np.zeros_like(section.mask), 180)
+
+    expected_wall = math.pi * (60.0**2 - 50.0**2) * (
+        manual.bottom_y_px - manual.top_y_px
+    )
+    assert result["wall_volume"] == pytest.approx(expected_wall, rel=0.02)
+    assert result["pappus_difference_percent"] == pytest.approx(0.0, abs=0.01)
 
 
 def test_low_resolution_270_by_170_image():
