@@ -4,17 +4,162 @@ from __future__ import annotations
 
 import argparse
 import math
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
-Info = dict[str, Any]
-Result = dict[str, Any]
+Info = Mapping[str, Any]
+Result = Mapping[str, Any]
 
 
 class GUIArgumentParser(argparse.ArgumentParser):
-    """Raise readable validation errors instead of exiting a background worker."""
+    """Deprecated parser shim; GUI workers now receive ``AnalysisParams``."""
 
     def error(self, message: str) -> None:
         raise ValueError(message)
+
+
+@dataclass(frozen=True)
+class TSVItem:
+    """One spreadsheet field shared by horizontal and vertical TSV output."""
+
+    label: str
+    result_key: str | None
+    unit: str
+    decimals: int | None
+    scaled_key: str | None = None
+    alternate_key: str | None = None
+    source: str = "result"
+    row_condition: str = "always"
+    table_condition: str = "always"
+
+
+TSV_ITEMS: tuple[TSVItem, ...] = (
+    TSVItem("画像ファイル", None, "", None, source="image_name"),
+    TSVItem("器高", "vessel_height", "length", 2),
+    TSVItem("口径", "mouth_diameter", "length", 2),
+    TSVItem("最大径", "maximum_diameter", "length", 2),
+    TSVItem("内腔容量", "capacity", "volume", 2, scaled_key="capacity_ml"),
+    TSVItem(
+        "内腔容量(cm³)", "capacity_cm3", "cm3", 2,
+        row_condition="never", table_condition="scaled",
+    ),
+    TSVItem("器壁体積", "wall_volume", "volume", 2, scaled_key="wall_volume_ml"),
+    TSVItem("全外形体積", None, "volume", 2, source="outer_volume"),
+    TSVItem(
+        "パップス検算", "pappus_wall_volume", "volume", 2,
+        scaled_key="pappus_wall_volume_ml",
+    ),
+    TSVItem("パップス差", "pappus_difference_percent", "percent", 2),
+    TSVItem(
+        "スケール", "mm_per_px", "scale", 4,
+        alternate_key="scale_mm_per_px", source="scale",
+        row_condition="scaled", table_condition="scale_available",
+    ),
+)
+
+
+class _OutputContext:
+    def __init__(self, info: Info) -> None:
+        self.info = info
+        self.result: Result = info["result"]
+        self.is_scaled = "capacity_ml" in self.result
+        self.length_unit = str(self.result["units"]["length"])
+        self.volume_unit = str(self.result["units"]["volume"])
+        self.row_volume_unit = self.volume_unit
+        if self.is_scaled and self.volume_unit in {"mm3", "mm³"}:
+            self.row_volume_unit = "mL"
+        scale_item = next(item for item in TSV_ITEMS if item.source == "scale")
+        self.scale_value = self.result.get(
+            scale_item.result_key or "",
+            self.result.get(scale_item.alternate_key or ""),
+        )
+
+
+def _include(item: TSVItem, context: _OutputContext, output: str) -> bool:
+    condition = item.row_condition if output == "row" else item.table_condition
+    if condition == "never":
+        return False
+    if condition == "scaled":
+        return context.is_scaled
+    if condition == "scale_available":
+        return context.scale_value is not None
+    return True
+
+
+def _item_value(item: TSVItem, context: _OutputContext) -> Any:
+    if item.source == "image_name":
+        return context.info["image_name"]
+    if item.source == "scale":
+        return context.scale_value
+    if item.source == "outer_volume":
+        if context.is_scaled:
+            return context.result["capacity_ml"] + context.result["wall_volume_ml"]
+        return context.result["capacity"] + context.result["wall_volume"]
+
+    result_key = item.scaled_key if context.is_scaled and item.scaled_key else item.result_key
+    if result_key is None:
+        raise KeyError(f"TSV項目 {item.label!r} に結果キーがありません")
+    return context.result[result_key]
+
+
+def _item_unit(item: TSVItem, context: _OutputContext, output: str) -> str:
+    if item.unit == "length":
+        return context.length_unit
+    if item.unit == "volume":
+        if output == "row":
+            return context.row_volume_unit
+        return "mL" if context.is_scaled else context.volume_unit
+    if item.unit == "cm3":
+        return "cm³"
+    if item.unit == "percent":
+        return "%"
+    if item.unit == "scale":
+        return "mm/px"
+    return ""
+
+
+def _row_header(item: TSVItem, context: _OutputContext) -> str:
+    if item.unit == "":
+        return item.label
+    if item.unit == "scale":
+        return "mm/px"
+    return f"{item.label}({_item_unit(item, context, 'row')})"
+
+
+def _format_value(value: Any, decimals: int | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value if decimals is None else _format_numeric_value(value, decimals)
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(numeric_value):
+        return ""
+    if decimals is None:
+        return str(value)
+    return f"{numeric_value:.{decimals}f}"
+
+
+def _format_numeric_value(value: str, decimals: int) -> str:
+    """Format a numeric string while keeping non-finite values out of TSV."""
+    try:
+        numeric_value = float(value)
+    except ValueError:
+        return value
+    if not math.isfinite(numeric_value):
+        return ""
+    return f"{numeric_value:.{decimals}f}"
+
+
+def _sanitize_cell(value: str, *, protect_formula: bool = False) -> str:
+    """Keep one TSV cell and optionally neutralize spreadsheet formulas."""
+    sanitized = value.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    if protect_formula and sanitized.startswith(("=", "+", "-", "@")):
+        return "'" + sanitized
+    return sanitized
 
 
 def pixel_distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:
@@ -27,76 +172,37 @@ def pixel_distance(point_a: tuple[float, float], point_b: tuple[float, float]) -
 
 def build_tsv_row(info: Info, include_header: bool = False) -> str:
     """Format analysis result into a single tab-separated line for Excel."""
-    res: Result = info["result"]
-    image_name = str(info["image_name"])
-    length_unit = str(res["units"]["length"])
-    volume_unit = str(res["units"]["volume"])
-    is_mm = "capacity_ml" in res
-    scale_mm_per_px = res.get("mm_per_px", res.get("scale_mm_per_px"))
-    if is_mm and volume_unit in {"mm3", "mm³"}:
-        volume_unit = "mL"
-    headers = [
-        "画像ファイル", f"器高({length_unit})", f"口径({length_unit})",
-        f"最大径({length_unit})", f"内腔容量({volume_unit})",
-        f"器壁体積({volume_unit})", f"全外形体積({volume_unit})",
-        f"パップス検算({volume_unit})", "パップス差(%)",
+    context = _OutputContext(info)
+    items = [item for item in TSV_ITEMS if _include(item, context, "row")]
+    lines: list[str] = []
+    if include_header:
+        headers = [_row_header(item, context) for item in items]
+        lines.append("\t".join(_sanitize_cell(value) for value in headers))
+    values = [
+        _sanitize_cell(
+            _format_value(_item_value(item, context), item.decimals),
+            protect_formula=item.source == "image_name",
+        )
+        for item in items
     ]
-    if is_mm:
-        headers.append("mm/px")
-        data = [
-            image_name,
-            f"{res['vessel_height']:.2f}", f"{res['mouth_diameter']:.2f}",
-            f"{res['maximum_diameter']:.2f}", f"{res['capacity_ml']:.2f}",
-            f"{res['wall_volume_ml']:.2f}",
-            f"{res['capacity_ml'] + res['wall_volume_ml']:.2f}",
-            f"{res['pappus_wall_volume_ml']:.2f}",
-            f"{res['pappus_difference_percent']:.2f}",
-            f"{scale_mm_per_px:.4f}" if scale_mm_per_px is not None else "",
-        ]
-    else:
-        data = [
-            image_name,
-            f"{res['vessel_height']:.2f}", f"{res['mouth_diameter']:.2f}",
-            f"{res['maximum_diameter']:.2f}", f"{res['capacity']:.2f}",
-            f"{res['wall_volume']:.2f}", f"{res['capacity'] + res['wall_volume']:.2f}",
-            f"{res['pappus_wall_volume']:.2f}",
-            f"{res['pappus_difference_percent']:.2f}",
-        ]
-    lines = ["\t".join(headers)] if include_header else []
-    lines.append("\t".join(data))
+    lines.append("\t".join(values))
     return "\n".join(lines)
 
 
 def build_tsv_table(info: Info) -> str:
     """Format analysis result into vertical tab-separated table rows for Excel."""
-    res: Result = info["result"]
-    image_name = str(info["image_name"])
-    length_unit = str(res["units"]["length"])
-    volume_unit = str(res["units"]["volume"])
-    scale_mm_per_px = res.get("mm_per_px", res.get("scale_mm_per_px"))
-    rows = [
-        ("項目", "値", "単位"), ("画像ファイル", image_name, ""),
-        ("器高", f"{res['vessel_height']:.2f}", length_unit),
-        ("口径", f"{res['mouth_diameter']:.2f}", length_unit),
-        ("最大径", f"{res['maximum_diameter']:.2f}", length_unit),
-    ]
-    if "capacity_ml" in res:
-        rows.extend([
-            ("内腔容量", f"{res['capacity_ml']:.2f}", "mL"),
-            ("内腔容量(cm³)", f"{res['capacity_cm3']:.2f}", "cm³"),
-            ("器壁体積", f"{res['wall_volume_ml']:.2f}", "mL"),
-            ("全外形体積", f"{res['capacity_ml'] + res['wall_volume_ml']:.2f}", "mL"),
-            ("パップス検算", f"{res['pappus_wall_volume_ml']:.2f}", "mL"),
-            ("パップス差", f"{res['pappus_difference_percent']:.2f}", "%"),
-        ])
-        if scale_mm_per_px is not None:
-            rows.append(("\u30b9\u30b1\u30fc\u30eb", f"{scale_mm_per_px:.4f}", "mm/px"))
-    else:
-        rows.extend([
-            ("内腔容量", f"{res['capacity']:.2f}", volume_unit),
-            ("器壁体積", f"{res['wall_volume']:.2f}", volume_unit),
-            ("全外形体積", f"{res['capacity'] + res['wall_volume']:.2f}", volume_unit),
-            ("パップス検算", f"{res['pappus_wall_volume']:.2f}", volume_unit),
-            ("パップス差", f"{res['pappus_difference_percent']:.2f}", "%"),
-        ])
-    return "\n".join(f"{a}\t{b}\t{c}".rstrip() for a, b, c in rows)
+    context = _OutputContext(info)
+    rows = [("項目", "値", "単位")]
+    for item in TSV_ITEMS:
+        if not _include(item, context, "table"):
+            continue
+        value = _sanitize_cell(
+            _format_value(_item_value(item, context), item.decimals),
+            protect_formula=item.source == "image_name",
+        )
+        unit = _item_unit(item, context, "table")
+        rows.append((item.label, value, unit))
+    return "\n".join(
+        "\t".join(_sanitize_cell(str(cell)) for cell in row).rstrip()
+        for row in rows
+    )
