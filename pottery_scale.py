@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import re
+import threading
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
@@ -82,9 +83,13 @@ def _ocr_engine():
     return RapidOCR()
 
 
+_ocr_lock = threading.Lock()
+
+
 def recognize_scale_text(image: np.ndarray) -> list[ScaleTextCandidate]:
     """Read metric length labels from an image using the bundled OCR engine."""
-    result = _ocr_engine()(image)
+    with _ocr_lock:
+        result = _ocr_engine()(image)
     texts = getattr(result, "txts", None)
     if texts is None:
         texts = ()
@@ -321,7 +326,10 @@ def detect_horizontal_scale_bars(
             support.append(float(np.mean(gray[y0:y1, x0:x1])) < 175)
         continuity = float(np.mean(support)) if support else 0.0
         tick_support = int(left_tick) + int(right_tick)
-        confidence = min(1.0, 0.72 * continuity + 0.14 * tick_support)
+        # Endpoint ticks are strong evidence that a long rail is a measured
+        # scale bar. Give them enough weight that a thin but continuous rail
+        # with both ticks can pass the conservative auto-apply threshold.
+        confidence = min(1.0, 0.35 * continuity + 0.32 * tick_support + 0.10)
         refined.append(
             ScaleBarCandidate(sx1, candidate.y1, sx2, candidate.y2, confidence, tick_support)
         )
@@ -375,6 +383,23 @@ def rank_scale_bars(
     lx0, ly0, lx1, ly1 = label.bounds
     label_width = max(1.0, lx1 - lx0)
     label_height = max(1.0, ly1 - ly0)
+
+    # When callers detect bars without passing OCR labels, strokes inside the
+    # recognized text can still look like short horizontal rails. Exclude those
+    # before proximity scoring so a line in "10cm" cannot outrank the ruler.
+    text_y_padding = max(1.0, label_height * 0.08)
+    min_text_overlap = max(4.0, label_width * 0.2)
+    bars = [
+        bar
+        for bar in bars
+        if not (
+            ly0 - text_y_padding
+            <= (bar.y1 + bar.y2) / 2
+            <= ly1 + text_y_padding
+            and max(0.0, min(bar.x2, lx1) - max(bar.x1, lx0))
+            >= min_text_overlap
+        )
+    ]
     vertical_scale = max(16.0, label_height * 2.0, height * 0.02)
     horizontal_scale = max(24.0, label_width * 1.25, width * 0.02)
 
@@ -449,7 +474,7 @@ def analyze_scale_candidates(
 def extract_scale_from_image(
     image: np.ndarray,
 ) -> tuple[ScaleTextCandidate | None, ScaleBarCandidate | None, float | None]:
-    """目盛り画像から (best_label, best_bar, mm_per_px) を自動抽出する。"""
+    """Extract (best_label, best_bar, mm_per_px) from a scale-bar image."""
     labels, bars = analyze_scale_candidates(image)
     best_label = labels[0] if labels else None
     best_bar = bars[0] if bars else None

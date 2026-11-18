@@ -60,9 +60,14 @@ class TSVItem:
 
 
 _SCALE_TSV_ITEM = TSVItem(
-    "スケール", "mm_per_px", "scale", 4,
-    alternate_key="scale_mm_per_px", source="scale",
-    row_condition="scaled", table_condition="scale_available",
+    "スケール",
+    "mm_per_px",
+    "scale",
+    4,
+    alternate_key="scale_mm_per_px",
+    source="scale",
+    row_condition="scaled",
+    table_condition="scale_available",
 )
 
 
@@ -73,13 +78,20 @@ TSV_ITEMS: tuple[TSVItem, ...] = (
     TSVItem("最大径", "maximum_diameter", "length", 2),
     TSVItem("内腔容量", "capacity", "volume", 2, scaled_key="capacity_ml"),
     TSVItem(
-        "内腔容量(cm³)", "capacity_cm3", "cm3", 2,
-        row_condition="never", table_condition="scaled",
+        "内腔容量(cm³)",
+        "capacity_cm3",
+        "cm3",
+        2,
+        row_condition="never",
+        table_condition="scaled",
     ),
     TSVItem("器壁体積", "wall_volume", "volume", 2, scaled_key="wall_volume_ml"),
     TSVItem("全外形体積", None, "volume", 2, source="outer_volume"),
     TSVItem(
-        "パップス検算", "pappus_wall_volume", "volume", 2,
+        "パップス検算",
+        "pappus_wall_volume",
+        "volume",
+        2,
         scaled_key="pappus_wall_volume_ml",
     ),
     TSVItem("パップス差", "pappus_difference_percent", "percent", 2),
@@ -102,9 +114,8 @@ class _OutputContext:
             self.scale_value = legacy_result.get("scale_mm_per_px")
         self.length_unit = str(self.result["units"]["length"])
         self.volume_unit = str(self.result["units"]["volume"])
-        self.row_volume_unit = self.volume_unit
-        if self.is_scaled and self.volume_unit in {"mm3", "mm³"}:
-            self.row_volume_unit = "mL"
+        # Scaled results read from the *_ml keys, so the unit is always mL.
+        self.row_volume_unit = "mL" if self.is_scaled else self.volume_unit
 
 
 def _include(
@@ -133,7 +144,9 @@ def _item_value(item: TSVItem, context: _OutputContext) -> Any:
             return result["capacity_ml"] + result["wall_volume_ml"]
         return result["capacity"] + result["wall_volume"]
 
-    result_key = item.scaled_key if context.is_scaled and item.scaled_key else item.result_key
+    result_key = (
+        item.scaled_key if context.is_scaled and item.scaled_key else item.result_key
+    )
     if result_key is None:
         raise KeyError(f"TSV項目 {item.label!r} に結果キーがありません")
     return result[result_key]
@@ -174,7 +187,7 @@ def _format_value(value: Any, decimals: int | None) -> str:
         return value if decimals is None else _format_numeric_value(value, decimals)
     try:
         numeric_value = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(value)
     if not math.isfinite(numeric_value):
         return ""
@@ -235,8 +248,7 @@ def build_tsv_table(info: Info) -> str:
         unit = _item_unit(item, context, "table")
         rows.append((item.label, value, unit))
     return "\n".join(
-        "\t".join(_sanitize_cell(str(cell)) for cell in row).rstrip()
-        for row in rows
+        "\t".join(_sanitize_cell(str(cell)) for cell in row).rstrip() for row in rows
     )
 
 

@@ -51,7 +51,7 @@ target-version = "py314"
 extend-exclude = ["build", "dist", ".venv", ".venv-build"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 
 [tool.pyright]
 pythonVersion = "3.14"
@@ -69,6 +69,7 @@ include = [
     "pottery_volume_gui_window.py",
     "pottery_volume_gui_profiles.py",
     "pottery_volume_gui_scale.py",
+    "pottery_volume_gui_style.py",
 ]
 exclude = ["build", "dist", ".venv", ".venv-build", "tests"]
 reportMissingTypeStubs = false
@@ -78,6 +79,7 @@ reportUnsupportedDunderAll = false
 python_version = "3.14"
 files = [
     "pottery_volume_geometry.py",
+    "pottery_volume_core.py",
     "pottery_volume_gui_helpers.py",
     "pottery_volume_gui_workers.py",
 ]

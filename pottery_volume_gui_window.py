@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,12 +23,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QSplitter,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -42,7 +44,7 @@ from pottery_scale import (
 )
 from pottery_volume_cli import AnalysisOutput, AnalysisParams
 from pottery_volume_core import compute_volumes, parse_crop, parse_points, visualize
-from pottery_volume_gui_helpers import Info, Result, build_tsv_row, build_tsv_table
+from pottery_volume_gui_helpers import Info, Result
 from pottery_volume_gui_profiles import ProfileEditorDialog
 from pottery_volume_gui_scale import ImageDialog, ScaleCalibrationDialog
 from pottery_volume_gui_workers import (
@@ -55,27 +57,130 @@ from pottery_volume_gui_workers import (
     WorkerFailed,
 )
 
-
 IMAGE_FILTERS = (
     "\u753b\u50cf\u30d5\u30a1\u30a4\u30eb (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;"
     "\u3059\u3079\u3066\u306e\u30d5\u30a1\u30a4\u30eb (*)"
 )
 
 
+HISTORY_HEADERS = (
+    "画像ファイル",
+    "器高",
+    "口径",
+    "最大径",
+    "内腔容量",
+    "器壁体積",
+    "全外形体積",
+    "パップス検算",
+    "パップス差 (%)",
+    "寸法単位",
+    "体積単位",
+)
+
+
+class HistoryTable(QTableWidget):
+    """Read-only grid that selects and copies like an Excel sheet."""
+
+    copied = Signal(str)
+
+    def __init__(
+        self, records: list[dict[str, str]], parent: QWidget | None = None
+    ) -> None:
+        super().__init__(len(records), len(HISTORY_HEADERS), parent)
+        self.setHorizontalHeaderLabels(list(HISTORY_HEADERS))
+        for row, record in enumerate(records):
+            for col, header in enumerate(HISTORY_HEADERS):
+                item = QTableWidgetItem(record.get(header, ""))
+                if col:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                self.setItem(row, col, item)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.setShowGrid(True)
+        self.setCornerButtonEnabled(True)  # top-left corner = select all
+        self.verticalHeader().setDefaultSectionSize(24)
+        self.resizeColumnsToContents()
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
+        if records:
+            self.setCurrentCell(0, 0)
+
+    def selection_tsv(self, with_header: bool = False) -> str:
+        """Return the selected cells as TSV; the bounding box is used like Excel."""
+        indexes = self.selectedIndexes()
+        if not indexes:
+            return ""
+        selected = {(index.row(), index.column()) for index in indexes}
+        rows = range(min(r for r, _ in selected), max(r for r, _ in selected) + 1)
+        cols = range(min(c for _, c in selected), max(c for _, c in selected) + 1)
+        lines: list[str] = []
+        if with_header:
+            lines.append("\t".join(HISTORY_HEADERS[c] for c in cols))
+        for row in rows:
+            cells: list[str] = []
+            for col in cols:
+                item = self.item(row, col) if (row, col) in selected else None
+                text = item.text() if item else ""
+                text = text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+                # The file-name column is free text: keep Excel from running it as a formula.
+                if col == 0 and text.startswith(("=", "+", "-", "@")):
+                    text = "'" + text
+                cells.append(text)
+            lines.append("\t".join(cells))
+        return "\n".join(lines)
+
+    def copy_selection(self, with_header: bool = False) -> None:
+        text = self.selection_tsv(with_header)
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        row_count = text.count("\n") + 1 - (1 if with_header else 0)
+        self.copied.emit(
+            f"{row_count}行をコピーしました。Excelにそのまま貼り付けできます。"
+        )
+
+    def keyPressEvent(self, event: Any) -> None:
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy_selection()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _show_menu(self, position: Any) -> None:
+        menu = QMenu(self)
+        copy = menu.addAction("コピー (Ctrl+C)")
+        copy_header = menu.addAction("見出し付きでコピー")
+        menu.addSeparator()
+        select_all = menu.addAction("すべて選択 (Ctrl+A)")
+        has_selection = bool(self.selectedIndexes())
+        copy.setEnabled(has_selection)
+        copy_header.setEnabled(has_selection)
+        chosen = menu.exec(self.viewport().mapToGlobal(position))
+        if chosen is copy:
+            self.copy_selection()
+        elif chosen is copy_header:
+            self.copy_selection(with_header=True)
+        elif chosen is select_all:
+            self.selectAll()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial: str | Path | None) -> None:
         super().__init__()
         self.setWindowTitle("土器体積・容量推定")
-        self.resize(1180, 780)
+        self.resize(1100, 700)
         self.setAcceptDrops(True)
         self.last_info: Info | None = None
         self.history: list[dict[str, str]] = []
-        self.worker_thread: Any = None
-        self.worker: Any = None
-        self.scale_thread: Any = None
-        self.scale_worker: Any = None
-        self.pair_thread: Any = None
-        self.pair_worker: Any = None
+        self.worker_thread: QThread | None = None
+        self.worker: AnalysisWorker | None = None
+        self.scale_thread: QThread | None = None
+        self.scale_worker: ScaleWorker | None = None
+        self.pair_thread: QThread | None = None
+        self.pair_worker: PairWorker | None = None
         self.analysis_generation = 0
         self.scale_generation = 0
         self.pair_generation = 0
@@ -91,51 +196,64 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(16, 14, 16, 12)
+        outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
-        title = QLabel("土器体積・容量推定")
-        title.setObjectName("appTitle")
-        title.setStyleSheet("font-size: 20px; font-weight: bold;")
-        outer.addWidget(title)
-        self.status = QLabel("画像を選択して「体積・容量を計算する」を押してください。")
-        self.status.setObjectName("statusMessage")
+        self.status = QLabel(
+            "画像を選択（ドラッグ＆ドロップ可）して「体積・容量を計算する」を押してください。"
+        )
+        self.status.setObjectName("status")
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         outer.addWidget(splitter, 1)
 
+        # Left: inputs
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(8, 8, 8, 8)
-        left_layout.setSpacing(12)
-        files = QGroupBox("画像の選択（ドラッグ＆ドロップ対応）")
+        left_layout.setContentsMargins(0, 0, 6, 0)
+        left_layout.setSpacing(6)
+
+        files = QGroupBox("画像")
         file_form = QFormLayout(files)
         self.image_edit = QLineEdit()
         self.image_edit.textChanged.connect(self._analysis_input_changed)
-        file_form.addRow("土器実測図", self._path_row(self.image_edit, self.browse_image, "土器画像"))
+        file_form.addRow(
+            "土器実測図", self._path_row(self.image_edit, self.browse_image, "土器画像")
+        )
         self.scale_image_edit = QLineEdit()
         self.scale_image_edit.textChanged.connect(self._scale_input_changed)
-        file_form.addRow("目盛り画像", self._path_row(self.scale_image_edit, self.browse_scale, "目盛り画像"))
+        file_form.addRow(
+            "目盛り画像",
+            self._path_row(self.scale_image_edit, self.browse_scale, "目盛り画像"),
+        )
         left_layout.addWidget(files)
 
-        scale = QGroupBox("スケール（実寸換算）設定")
-        scale_form = QFormLayout(scale)
-        self.scale_form = scale_form
+        scale = QGroupBox("スケール")
+        form = QFormLayout(scale)
+        self.scale_form = form
         self.scale_mode = QComboBox()
-        self.scale_mode.addItems(["px（スケール未指定）", "mm/px を直接指定", "スケール線の px と mm", "2点座標と既知 mm", "器高から換算"])
+        self.scale_mode.addItems(
+            [
+                "px（スケール未指定）",
+                "mm/px を直接指定",
+                "スケール線の px と mm",
+                "2点座標と既知 mm",
+                "器高から換算",
+            ]
+        )
         self.direct_edit = QLineEdit()
         self.bar_px_edit = QLineEdit()
         self.points_edit = QLineEdit()
         self.known_mm_edit = QLineEdit()
         self.height_edit = QLineEdit()
         self.scale_mode.currentTextChanged.connect(self._update_scale_fields)
-        scale_form.addRow("指定方法", self.scale_mode)
-        scale_form.addRow("mm/px", self.direct_edit)
-        scale_form.addRow("線長 (px)", self.bar_px_edit)
-        scale_form.addRow("2点座標", self.points_edit)
-        scale_form.addRow("実寸 (mm)", self.known_mm_edit)
-        scale_form.addRow("器高 (mm)", self.height_edit)
+        form.addRow("指定方法", self.scale_mode)
+        form.addRow("mm/px", self.direct_edit)
+        form.addRow("線長 (px)", self.bar_px_edit)
+        form.addRow("2点座標", self.points_edit)
+        form.addRow("実寸 (mm)", self.known_mm_edit)
+        form.addRow("器高 (mm)", self.height_edit)
         scale_buttons = QHBoxLayout()
         measure = QPushButton("目盛りを確認・手動修正…")
         measure.clicked.connect(self.measure_scale)
@@ -144,11 +262,10 @@ class MainWindow(QMainWindow):
         auto.clicked.connect(self.auto_scale)
         scale_buttons.addWidget(measure)
         scale_buttons.addWidget(auto)
-        scale_form.addRow("", scale_buttons)
+        form.addRow("", scale_buttons)
         left_layout.addWidget(scale)
 
-        advanced = QGroupBox("詳細設定")
-        advanced_form = QFormLayout(advanced)
+        # Advanced settings: a checkable box that stays folded until ticked.
         self.axis_edit = QLineEdit()
         self.crop_edit = QLineEdit()
         self.liquid_edit = QLineEdit()
@@ -166,6 +283,12 @@ class MainWindow(QMainWindow):
         self.adaptive = QCheckBox("適応的二値化")
         self.debug_edit = QLineEdit()
         self.json_edit = QLineEdit()
+        advanced = QGroupBox("詳細設定")
+        advanced.setCheckable(True)
+        advanced.setChecked(False)
+        advanced_body = QWidget()
+        advanced_form = QFormLayout(advanced_body)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
         for label, widget in (
             ("回転軸 x", self.axis_edit),
             ("切り出し x0,y0,x1,y1", self.crop_edit),
@@ -179,36 +302,49 @@ class MainWindow(QMainWindow):
         ):
             advanced_form.addRow(label, widget)
         advanced_form.addRow("", self.adaptive)
+        advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.addWidget(advanced_body)
+        advanced_body.setVisible(False)
+        advanced.toggled.connect(advanced_body.setVisible)
         left_layout.addWidget(advanced)
         left_layout.addStretch()
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         left_scroll.setWidget(left)
         splitter.addWidget(left_scroll)
 
+        # Right: results and log
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(8, 8, 8, 8)
-        right_layout.setSpacing(12)
-        kpi = QGroupBox("推定結果")
-        kpi_layout = QGridLayout(kpi)
+        right_layout.setContentsMargins(6, 0, 0, 0)
+        right_layout.setSpacing(6)
+        result_box = QGroupBox("推定結果")
+        result_grid = QGridLayout(result_box)
         self.capacity_label = QLabel("—")
         self.wall_label = QLabel("—")
-        self.details_label = QLabel("器高: —\n口径: —\n最大径: —\n全外形体積: —\nパップス検算: —\n適用スケール: —")
+        self.details_label = QLabel(
+            "器高: —\n口径: —\n最大径: —\n全外形体積: —\nパップス検算: —\n適用スケール: —"
+        )
+        self.details_label.setObjectName("details")
         for widget in (self.capacity_label, self.wall_label):
-            widget.setStyleSheet("font-size: 18px; font-weight: bold;")
-        kpi_layout.addWidget(QLabel("内腔容量"), 0, 0)
-        kpi_layout.addWidget(self.capacity_label, 1, 0)
-        kpi_layout.addWidget(QLabel("器壁体積"), 0, 1)
-        kpi_layout.addWidget(self.wall_label, 1, 1)
-        kpi_layout.addWidget(self.details_label, 2, 0, 1, 2)
-        right_layout.addWidget(kpi)
+            widget.setObjectName("bigValue")
+        for column, text in enumerate(("内腔容量", "器壁体積")):
+            caption = QLabel(text)
+            caption.setObjectName("caption")
+            result_grid.addWidget(caption, 0, column)
+        result_grid.addWidget(self.capacity_label, 1, 0)
+        result_grid.addWidget(self.wall_label, 1, 1)
+        result_grid.addWidget(self.details_label, 2, 0, 1, 2)
+        right_layout.addWidget(result_box)
+        log_box = QGroupBox("ログ・注意メッセージ")
+        log_layout = QVBoxLayout(log_box)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        right_layout.addWidget(QLabel("詳細ログ・注意メッセージ"))
-        right_layout.addWidget(self.log, 1)
+        log_layout.addWidget(self.log)
+        right_layout.addWidget(log_box, 1)
         splitter.addWidget(right)
-        splitter.setSizes([540, 620])
+        splitter.setSizes([500, 540])
 
         action = QHBoxLayout()
         self.calculate_button = QPushButton("体積・容量を計算する (Enter)")
@@ -216,7 +352,10 @@ class MainWindow(QMainWindow):
         self.calculate_button.setDefault(True)
         self.calculate_button.clicked.connect(self.calculate)
         action.addWidget(self.calculate_button, 1)
-        for text, callback in (("測定履歴", self.show_history), ("ライセンス表記", self.show_license)):
+        for text, callback in (
+            ("測定履歴", self.show_history),
+            ("ライセンス表記", self.show_license),
+        ):
             button = QPushButton(text)
             button.clicked.connect(callback)
             action.addWidget(button)
@@ -225,17 +364,6 @@ class MainWindow(QMainWindow):
         self.profile_button.clicked.connect(self.edit_profiles)
         action.addWidget(self.profile_button)
         outer.addLayout(action)
-        copy_row = QHBoxLayout()
-        for text, callback in (
-            ("サマリー", self.copy_summary),
-            ("Excel横1行", self.copy_row),
-            ("ヘッダー付1行", self.copy_header),
-            ("Excel縦の表", self.copy_table),
-        ):
-            button = QPushButton(text)
-            button.clicked.connect(callback)
-            copy_row.addWidget(button)
-        outer.addLayout(copy_row)
         self._update_scale_fields(self.scale_mode.currentText())
 
     def _path_row(self, edit: Any, callback: Any, kind: str) -> Any:
@@ -262,14 +390,18 @@ class MainWindow(QMainWindow):
         self.scale_form.setRowVisible(self.height_edit, mode == "器高から換算")
 
     def browse_image(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "土器実測図を選択", "", IMAGE_FILTERS)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "土器実測図を選択", "", IMAGE_FILTERS
+        )
         if path:
             self.image_edit.setText(path)
             self.debug_edit.setText(str(Path(path).parent / "debug_out"))
             self.status.setText(f"土器実測図を選択しました: {Path(path).name}")
 
     def browse_scale(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "目盛り画像を選択", "", IMAGE_FILTERS)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "目盛り画像を選択", "", IMAGE_FILTERS
+        )
         if path:
             self.scale_image_edit.setText(path)
             self.auto_scale()
@@ -290,7 +422,11 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, event: Any) -> None:
         paths = [Path(url.toLocalFile()) for url in event.mimeData().urls()]
-        paths = [p for p in paths if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}]
+        paths = [
+            p
+            for p in paths
+            if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+        ]
         if len(paths) == 1:
             self.image_edit.setText(str(paths[0]))
             self.status.setText("土器画像を選択しました。")
@@ -344,9 +480,7 @@ class MainWindow(QMainWindow):
             )
             return
         self.status.setText("2枚の画像を判別しています…")
-        self._start_background_worker(
-            PairWorker(paths, self.pair_generation), "pair"
-        )
+        self._start_background_worker(PairWorker(paths, self.pair_generation), "pair")
 
     def _pair_finished(self, payload: PairFinished) -> None:
         generation, result = payload.generation, payload.result
@@ -368,7 +502,9 @@ class MainWindow(QMainWindow):
     def auto_scale(self) -> None:
         path = self._current_scale_path()
         if path is None or not path.is_file():
-            QMessageBox.warning(self, "画像が未指定です", "目盛り画像または土器画像を選択してください。")
+            QMessageBox.warning(
+                self, "画像が未指定です", "目盛り画像または土器画像を選択してください。"
+            )
             return
         if self.scale_thread is not None:
             self.scale_generation += 1
@@ -377,9 +513,7 @@ class MainWindow(QMainWindow):
         self.scale_generation += 1
         self.auto_scale_button.setEnabled(False)
         self.status.setText("目盛り画像を解析しています…")
-        self._start_background_worker(
-            ScaleWorker(path, self.scale_generation), "scale"
-        )
+        self._start_background_worker(ScaleWorker(path, self.scale_generation), "scale")
 
     def _scale_finished(self, payload: ScaleFinished) -> None:
         path = payload.path
@@ -466,9 +600,14 @@ class MainWindow(QMainWindow):
             )
 
     def measure_scale(self) -> None:
-        path = Path(self.scale_image_edit.text().strip().strip('"') or self.image_edit.text().strip().strip('"'))
+        path = Path(
+            self.scale_image_edit.text().strip().strip('"')
+            or self.image_edit.text().strip().strip('"')
+        )
         if not path.is_file():
-            QMessageBox.warning(self, "画像がありません", "先に土器画像か目盛り画像を選択してください。")
+            QMessageBox.warning(
+                self, "画像がありません", "先に土器画像か目盛り画像を選択してください。"
+            )
             return
         try:
             candidate_path = self.scale_detection_path
@@ -487,7 +626,9 @@ class MainWindow(QMainWindow):
             self.direct_edit.setText(f"{dialog.mm_per_px:.10g}")
             self.bar_px_edit.setText(f"{dialog.line_pixels:.2f}")
             self.scale_mode.setCurrentText("mm/px を直接指定")
-            self.status.setText(f"手動確認したスケールを設定しました: {dialog.mm_per_px:.6g} mm/px")
+            self.status.setText(
+                f"手動確認したスケールを設定しました: {dialog.mm_per_px:.6g} mm/px"
+            )
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "目盛りを測定できません", str(exc))
 
@@ -506,7 +647,9 @@ class MainWindow(QMainWindow):
             raise ValueError("土器実測図を選択してください。")
         smooth_window = self.smooth_spin.value()
         if smooth_window != 0 and smooth_window % 2 == 0:
-            raise ValueError("\u5e73\u6ed1\u5316\u7a93\u306f0\u307e\u305f\u306f\u5947\u6570\u3067\u6307\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+            raise ValueError(
+                "\u5e73\u6ed1\u5316\u7a93\u306f0\u307e\u305f\u306f\u5947\u6570\u3067\u6307\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+            )
         mode = self.scale_mode.currentText()
         scale_mm_per_px = None
         scale_bar_px = None
@@ -587,7 +730,9 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self._analysis_failed)
         self.worker.finished.connect(self.worker_thread.quit)
         self.worker.failed.connect(self.worker_thread.quit)
-        self.worker_thread.finished.connect(lambda: self.calculate_button.setEnabled(True))
+        self.worker_thread.finished.connect(
+            lambda: self.calculate_button.setEnabled(True)
+        )
         self.worker_thread.finished.connect(self._clear_analysis_worker)
         self.worker_thread.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
@@ -678,7 +823,9 @@ class MainWindow(QMainWindow):
             pappus = result["pappus_wall_volume"]
             unit = str(result["units"]["volume"])
         scale = result.get("mm_per_px")
-        scale_text = f"{scale:.4f} mm/px" if scale is not None else "\u672a\u6307\u5b9a (px)"
+        scale_text = (
+            f"{scale:.4f} mm/px" if scale is not None else "\u672a\u6307\u5b9a (px)"
+        )
         self.capacity_label.setText(f"{capacity:.2f} {unit}")
         self.wall_label.setText(f"{wall:.2f} {unit}")
         self.details_label.setText(
@@ -696,9 +843,13 @@ class MainWindow(QMainWindow):
             "\u8f2a\u90ed\u30fb\u56de\u8ee2\u8ef8\u306e\u691c\u51fa\u306f\u6b63\u5e38\u306b\u5b8c\u4e86\u3057\u307e\u3057\u305f\u3002",
         ]
         if output.warnings:
-            log += ["", "\u3010\u6ce8\u610f\u30fb\u8b66\u544a\u3011"] + [f"\u30fb{item}" for item in output.warnings]
+            log += ["", "\u3010\u6ce8\u610f\u30fb\u8b66\u544a\u3011"] + [
+                f"\u30fb{item}" for item in output.warnings
+            ]
         self.log.setPlainText("\n".join(log))
-        self.status.setText(f"\u8a08\u7b97\u5b8c\u4e86: \u5bb9\u91cf {capacity:.2f} {unit}")
+        self.status.setText(
+            f"\u8a08\u7b97\u5b8c\u4e86: \u5bb9\u91cf {capacity:.2f} {unit}"
+        )
 
     def edit_profiles(self) -> None:
         output = self.current_analysis
@@ -715,16 +866,16 @@ class MainWindow(QMainWindow):
         try:
             output.profiles = dialog.corrected_profiles
             recomputed = compute_volumes(
-                    output.profiles,
-                    output.section.mask,
-                    float(output.result["axis_x_px"]),
-                    output.mm_per_px,
-                    output.section_mode,
+                output.profiles,
+                output.section.mask,
+                float(output.result["axis_x_px"]),
+                output.mm_per_px,
+                output.section_mode,
             )
-            cast(dict[str, Any], output.result).update(
-                cast(dict[str, Any], recomputed)
+            cast(dict[str, Any], output.result).update(cast(dict[str, Any], recomputed))
+            output.warnings.append(
+                "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
             )
-            output.warnings.append("\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002")
             if output.params.debug_dir:
                 visualize(
                     output.image,
@@ -735,7 +886,9 @@ class MainWindow(QMainWindow):
                     output.params.debug_dir,
                 )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "\u518d\u8a08\u7b97\u3067\u304d\u307e\u305b\u3093", str(exc))
+            QMessageBox.critical(
+                self, "\u518d\u8a08\u7b97\u3067\u304d\u307e\u305b\u3093", str(exc)
+            )
             return
         self._refresh_result()
         if self.history:
@@ -749,7 +902,9 @@ class MainWindow(QMainWindow):
             cast(float, result.get("capacity_ml")) if is_mm else result["capacity"]
         )
         wall = (
-            cast(float, result.get("wall_volume_ml")) if is_mm else result["wall_volume"]
+            cast(float, result.get("wall_volume_ml"))
+            if is_mm
+            else result["wall_volume"]
         )
         pappus = (
             cast(float, result.get("pappus_wall_volume_ml"))
@@ -767,57 +922,26 @@ class MainWindow(QMainWindow):
             "\u30d1\u30c3\u30d7\u30b9\u691c\u7b97": f"{pappus:.2f}",
             "\u30d1\u30c3\u30d7\u30b9\u5dee (%)": f"{result['pappus_difference_percent']:.2f}",
             "\u5bf8\u6cd5\u5358\u4f4d": str(result["units"]["length"]),
-            "\u4f53\u7a4d\u5358\u4f4d": "mL" if is_mm else str(result["units"]["volume"]),
+            "\u4f53\u7a4d\u5358\u4f4d": (
+                "mL" if is_mm else str(result["units"]["volume"])
+            ),
         }
-
-    def _copy(self, text: str, message: str) -> None:
-        if self.last_info is None:
-            QMessageBox.information(self, "案内", "先に計算を実行してください。")
-            return
-        QApplication.clipboard().setText(text)
-        self.status.setText(message)
-
-    def copy_summary(self) -> None:
-        if not self.last_info:
-            self._copy("", "")
-            return
-        self._copy(build_tsv_table(self.last_info), "サマリーをコピーしました。")
-
-    def copy_row(self) -> None:
-        self._copy(build_tsv_row(self.last_info) if self.last_info else "", "Excel用横1行をコピーしました。")
-
-    def copy_header(self) -> None:
-        self._copy(build_tsv_row(self.last_info, True) if self.last_info else "", "ヘッダー付きデータをコピーしました。")
-
-    def copy_table(self) -> None:
-        self._copy(build_tsv_table(self.last_info) if self.last_info else "", "Excel用縦の表をコピーしました。")
 
     def show_history(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("測定履歴一覧")
         dialog.resize(1200, 420)
         layout = QVBoxLayout(dialog)
-        table = QTableWidget(len(self.history), 11)
-        table.setHorizontalHeaderLabels(
-            [
-                "画像ファイル",
-                "器高",
-                "口径",
-                "最大径",
-                "内腔容量",
-                "器壁体積",
-                "全外形体積",
-                "パップス検算",
-                "パップス差 (%)",
-                "寸法単位",
-                "体積単位",
-            ]
+        hint = QLabel(
+            "セルをドラッグ・Shift/Ctrl+クリックで選択し、Ctrl+C でコピーできます。"
+            "列見出し・行番号のクリックで列・行ごと選択、右クリックで見出し付きコピー。"
         )
-        for row, record in enumerate(self.history):
-            for col, value in enumerate(record.values()):
-                table.setItem(row, col, QTableWidgetItem(value))
-        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        layout.addWidget(table)
+        hint.setObjectName("caption")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        table = HistoryTable(self.history)
+        table.copied.connect(hint.setText)
+        layout.addWidget(table, 1)
         close = QPushButton("閉じる")
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)

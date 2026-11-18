@@ -167,3 +167,23 @@ python -m pytest -q
 ~~~
 
 テストは円筒殻と半球殻の合成線画を処理し、容量・器壁体積の解析値との誤差 5% 以内、ならびにスケール換算を確認します。
+
+## Python、品質チェック、PyInstaller
+
+`pyproject.toml` に実行時依存と対応Pythonバージョン（CPython 3.14）を定義しています。開発用依存には Ruff、Pyright、pytest、PyInstaller を含めています。
+
+~~~powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+ruff check .
+pyright
+~~~
+
+2つの `.spec` はどちらもプロジェクトのルートで実行します。`PotteryVolume.spec` は `dist/PotteryVolume/`、`PotteryVolume_ScaleOCR.spec` は `dist/PotteryVolume_ScaleOCR/` に、ウィンドウ形式のonedirアプリを作ります。両方ともRapidOCRのデータ・バイナリ・hidden importを収集し、`THIRD_PARTY_LICENSES.txt` を同梱します。
+
+~~~powershell
+python -m PyInstaller --noconfirm PotteryVolume.spec
+python -m PyInstaller --noconfirm PotteryVolume_ScaleOCR.spec
+~~~
+
+`build_exe.bat` と `build_exe.sh` は従来どおり `PotteryVolume_ScaleOCR` を作ります。通常版も作る場合は上記の `PotteryVolume.spec` を実行してください。

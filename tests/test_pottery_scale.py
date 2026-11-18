@@ -9,9 +9,11 @@ import numpy as np
 import pytest
 
 from pottery_scale import (
+    analyze_scale_candidates,
     classify_pottery_and_scale,
     detect_horizontal_scale_bars,
     extract_scale_from_image,
+    has_confident_scale_match,
     parse_metric_length,
     rank_scale_bars,
     recognize_scale_text,
@@ -66,6 +68,10 @@ def test_real_scale_image_reads_ten_centimetres_and_scale_bar():
     assert bars
     assert bars[0].pixels == pytest.approx(436, abs=4)
     assert scale_label.length_mm == 100
+
+    analyzed_labels, analyzed_bars = analyze_scale_candidates(image)
+    assert analyzed_bars[0].pixels == pytest.approx(436, abs=4)
+    assert has_confident_scale_match(analyzed_labels, analyzed_bars)
 
 
 def test_classify_pottery_and_scale_with_fixture_images():

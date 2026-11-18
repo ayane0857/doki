@@ -34,14 +34,21 @@ def _configure_logging() -> Path | None:
     if local_app_data:
         primary_directory = Path(local_app_data) / "PotteryVolume" / "logs"
     else:
-        state_directory = Path(state_home) if state_home else Path.home() / ".local" / "state"
+        state_directory = (
+            Path(state_home) if state_home else Path.home() / ".local" / "state"
+        )
         primary_directory = state_directory / "PotteryVolume" / "logs"
 
-    directories = (primary_directory, Path(tempfile.gettempdir()) / "PotteryVolume" / "logs")
+    directories = (
+        primary_directory,
+        Path(tempfile.gettempdir()) / "PotteryVolume" / "logs",
+    )
     for directory in directories:
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            handler = logging.FileHandler(directory / "pottery_volume.log", encoding="utf-8")
+            handler = logging.FileHandler(
+                directory / "pottery_volume.log", encoding="utf-8"
+            )
         except OSError:
             continue
         handler.setFormatter(
