@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import math
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict, cast
 
 from pottery_volume_cli import AnalysisResult
+from pottery_volume_geometry import pixel_distance
 
 Result = AnalysisResult
 
@@ -29,6 +31,14 @@ TSVCondition = Literal["always", "never", "scaled", "scale_available"]
 
 class GUIArgumentParser(argparse.ArgumentParser):
     """Deprecated parser shim; GUI workers now receive ``AnalysisParams``."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        warnings.warn(
+            "GUIArgumentParser は非推奨です。AnalysisParams を直接使用してください。",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
 
     def error(self, message: str) -> None:
         raise ValueError(message)
@@ -192,14 +202,6 @@ def _sanitize_cell(value: str, *, protect_formula: bool = False) -> str:
     return sanitized
 
 
-def pixel_distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:
-    """Return the distance between two image points in pixels."""
-    distance = math.hypot(point_b[0] - point_a[0], point_b[1] - point_a[1])
-    if not math.isfinite(distance):
-        raise ValueError("2点間の距離を計算できません。")
-    return distance
-
-
 def build_tsv_row(info: Info, include_header: bool = False) -> str:
     """Format analysis result into a single tab-separated line for Excel."""
     context = _OutputContext(info)
@@ -236,3 +238,15 @@ def build_tsv_table(info: Info) -> str:
         "\t".join(_sanitize_cell(str(cell)) for cell in row).rstrip()
         for row in rows
     )
+
+
+__all__ = [
+    "GUIArgumentParser",
+    "Info",
+    "Result",
+    "TSVItem",
+    "TSV_ITEMS",
+    "build_tsv_row",
+    "build_tsv_table",
+    "pixel_distance",
+]

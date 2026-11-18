@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +13,9 @@ import numpy as np
 import pytest
 
 from pottery_volume import (
+    AnalysisParams,
     apply_profile_overrides,
+    analyze_detailed,
     binarize_image,
     compute_volumes,
     detect_axis,
@@ -158,9 +162,60 @@ def test_scale_conversion_is_cubic_and_reports_ml():
     assert result["capacity_ml"] == pytest.approx(result["capacity_cm3"])
 
 
+def test_analysis_params_preserve_baseline_numeric_results(tmp_path: Path):
+    """The structured API retains the former integration's exact values."""
+    image_path = tmp_path / "cylinder.png"
+    write_image(image_path, cylinder_shell())
+
+    params = AnalysisParams(input_path=image_path, scale_mm_per_px=0.5)
+    output = analyze_detailed(params)
+
+    assert output.params is params
+    assert output.args.input == image_path
+    assert output.result["capacity"] == 183334.8931735552
+    assert output.result["wall_volume"] == 73887.38689914855
+    assert output.result["pappus_wall_volume"] == 73887.38689914795
+    assert output.result["pappus_difference_percent"] == 8.074835900982665e-13
+    assert output.result["capacity_ml"] == 183.3348931735552
+    assert output.result["wall_volume_ml"] == 73.88738689914855
+    assert output.result["mm_per_px"] == 0.5
+    assert "scale_mm_per_px" not in output.result
+
+
+def test_resolve_scale_accepts_analysis_params():
+    params = AnalysisParams(input_path=Path("input.png"), scale_mm_per_px=0.25)
+    profiles = SimpleNamespace(top_y_px=0.0, bottom_y_px=10.0)
+
+    assert resolve_scale(params, profiles) == 0.25
+
+
+def test_cli_import_does_not_load_qt():
+    """CLI and pure GUI helper imports do not require a Qt runtime."""
+    code = (
+        "import sys; import pottery_volume; import pottery_volume_gui; "
+        "import pottery_volume_gui_qt; "
+        "assert not any(name == 'PySide6' or name.startswith('PySide6.') "
+        "for name in sys.modules)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
 def test_pixel_distance_returns_image_distance():
     """The GUI measurement helper reports the Euclidean pixel distance."""
     assert pixel_distance((10, 20), (13, 24)) == pytest.approx(5)
+
+
+@pytest.mark.parametrize("point_b", [(math.nan, 0.0), (math.inf, 0.0), (-math.inf, 0.0)])
+def test_pixel_distance_rejects_non_finite_coordinates(point_b):
+    with pytest.raises(ValueError):
+        pixel_distance((0.0, 0.0), point_b)
+
+
+def test_print_result_remains_importable_but_private():
+    import pottery_volume
+
+    assert callable(pottery_volume._print_result)
+    assert "_print_result" not in pottery_volume.__all__
 
 
 def test_profile_section_polygon_is_valid_and_reports_shapely_centroid():
@@ -354,4 +409,103 @@ def test_build_tsv_row_and_table_for_excel():
     assert any("器高\t120.50\tmm" in line for line in table_lines)
     assert any("内腔容量\t450.25\tmL" in line for line in table_lines)
     assert any("全外形体積\t535.37\tmL" in line for line in table_lines)
+
+
+def test_tsv_cell_content_cannot_add_rows_or_columns():
+    info = {
+        "image_name": "pottery\t01\nimage.png",
+        "result": {
+            "units": {"length": "mm", "volume": "mm³"},
+            "vessel_height": 12.0,
+            "mouth_diameter": 9.0,
+            "maximum_diameter": 11.0,
+            "capacity_ml": 4.0,
+            "capacity_cm3": 4.0,
+            "wall_volume_ml": 2.0,
+            "wall_volume_cm3": 2.0,
+            "pappus_wall_volume_ml": 2.0,
+            "pappus_difference_percent": 0.0,
+            "mm_per_px": 0.25,
+        },
+    }
+
+    row = build_tsv_row(info, include_header=True)
+    table = build_tsv_table(info)
+
+    assert len(row.splitlines()) == 2
+    assert len(row.splitlines()[1].split("\t")) == 10
+    assert row.splitlines()[1].split("\t")[0] == "pottery 01 image.png"
+    assert len(table.splitlines()) == 12
+    assert table.splitlines()[1].split("\t")[1] == "pottery 01 image.png"
+
+
+def test_tsv_builders_keep_exact_legacy_output():
+    scaled = {
+        "image_name": "pottery_01.png",
+        "result": {
+            "units": {"length": "mm", "volume": "cm³"},
+            "vessel_height": 120.5,
+            "mouth_diameter": 95.2,
+            "maximum_diameter": 110.8,
+            "capacity_ml": 450.25,
+            "capacity_cm3": 450.25,
+            "wall_volume_ml": 85.12,
+            "wall_volume_cm3": 85.12,
+            "pappus_wall_volume_ml": 84.95,
+            "pappus_difference_percent": 0.20,
+            "scale_mm_per_px": 0.25,
+        },
+    }
+    pixels = {
+        "image_name": "vessel.png",
+        "result": {
+            "units": {"length": "px", "volume": "px³"},
+            "vessel_height": 10.0,
+            "mouth_diameter": 4.0,
+            "maximum_diameter": 6.0,
+            "capacity": 20.0,
+            "wall_volume": 3.0,
+            "pappus_wall_volume": 3.1,
+            "pappus_difference_percent": 3.3,
+            "mm_per_px": None,
+        },
+    }
+
+    assert build_tsv_row(scaled, include_header=True) == (
+        "画像ファイル\t器高(mm)\t口径(mm)\t最大径(mm)\t内腔容量(cm³)\t"
+        "器壁体積(cm³)\t全外形体積(cm³)\tパップス検算(cm³)\tパップス差(%)\tmm/px\n"
+        "pottery_01.png\t120.50\t95.20\t110.80\t450.25\t85.12\t535.37\t"
+        "84.95\t0.20\t0.2500"
+    )
+    assert build_tsv_table(scaled) == (
+        "項目\t値\t単位\n"
+        "画像ファイル\tpottery_01.png\n"
+        "器高\t120.50\tmm\n"
+        "口径\t95.20\tmm\n"
+        "最大径\t110.80\tmm\n"
+        "内腔容量\t450.25\tmL\n"
+        "内腔容量(cm³)\t450.25\tcm³\n"
+        "器壁体積\t85.12\tmL\n"
+        "全外形体積\t535.37\tmL\n"
+        "パップス検算\t84.95\tmL\n"
+        "パップス差\t0.20\t%\n"
+        "スケール\t0.2500\tmm/px"
+    )
+    assert build_tsv_row(pixels, include_header=True) == (
+        "画像ファイル\t器高(px)\t口径(px)\t最大径(px)\t内腔容量(px³)\t"
+        "器壁体積(px³)\t全外形体積(px³)\tパップス検算(px³)\tパップス差(%)\n"
+        "vessel.png\t10.00\t4.00\t6.00\t20.00\t3.00\t23.00\t3.10\t3.30"
+    )
+    assert build_tsv_table(pixels) == (
+        "項目\t値\t単位\n"
+        "画像ファイル\tvessel.png\n"
+        "器高\t10.00\tpx\n"
+        "口径\t4.00\tpx\n"
+        "最大径\t6.00\tpx\n"
+        "内腔容量\t20.00\tpx³\n"
+        "器壁体積\t3.00\tpx³\n"
+        "全外形体積\t23.00\tpx³\n"
+        "パップス検算\t3.10\tpx³\n"
+        "パップス差\t3.30\t%"
+    )
 

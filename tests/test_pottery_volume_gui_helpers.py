@@ -6,7 +6,14 @@ import math
 
 import pytest
 
-from pottery_volume_gui_helpers import build_tsv_row, build_tsv_table, _format_value
+from pottery_volume_gui_helpers import (
+    GUIArgumentParser,
+    build_tsv_row,
+    build_tsv_table,
+    pixel_distance as helper_pixel_distance,
+    _format_value,
+)
+from pottery_volume_geometry import pixel_distance
 
 
 def _info(image_name: str, *, scaled: bool = True) -> dict[str, object]:
@@ -76,3 +83,16 @@ def test_non_finite_tsv_values_are_blank_and_pixel_scale_is_omitted() -> None:
     assert row.split("\t")[7] == ""
     assert len(row.split("\t")) == 9
     assert all("mm/px" not in line for line in table.splitlines())
+
+
+def test_pixel_distance_keeps_legacy_helper_import_path() -> None:
+    assert helper_pixel_distance is pixel_distance
+    assert pixel_distance((1.0, 2.0), (4.0, 6.0)) == 5.0
+
+
+def test_gui_argument_parser_warns_but_remains_usable() -> None:
+    with pytest.warns(DeprecationWarning, match="GUIArgumentParser"):
+        parser = GUIArgumentParser()
+
+    with pytest.raises(ValueError):
+        parser.error("bad arguments")
