@@ -25,6 +25,7 @@ dev = [
     "pyinstaller==6.22.3",
     "ruff>=0.12,<1",
     "pyright>=1.1.400,<2",
+    "mypy>=1.10,<2",
 ]
 
 [tool.setuptools]
@@ -72,3 +73,24 @@ include = [
 exclude = ["build", "dist", ".venv", ".venv-build", "tests"]
 reportMissingTypeStubs = false
 reportUnsupportedDunderAll = false
+
+[tool.mypy]
+python_version = "3.14"
+files = [
+    "pottery_volume_geometry.py",
+    "pottery_volume_gui_helpers.py",
+    "pottery_volume_gui_workers.py",
+]
+follow_imports = "silent"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["pottery_volume_geometry", "pottery_volume_gui_helpers"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["pottery_volume_gui_workers"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

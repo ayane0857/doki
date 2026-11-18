@@ -7,7 +7,7 @@ import math
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, Never, TypedDict, cast
 
 from pottery_volume_cli import AnalysisResult
 from pottery_volume_geometry import pixel_distance
@@ -40,7 +40,7 @@ class GUIArgumentParser(argparse.ArgumentParser):
         )
         super().__init__(*args, **kwargs)
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> Never:
         raise ValueError(message)
 
 

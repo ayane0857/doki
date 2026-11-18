@@ -83,6 +83,26 @@ def test_non_finite_tsv_values_are_blank_and_pixel_scale_is_omitted() -> None:
     assert row.split("\t")[7] == ""
     assert len(row.split("\t")) == 9
     assert all("mm/px" not in line for line in table.splitlines())
+    assert table.splitlines()[5].split("\t")[1] == ""
+    assert table.splitlines()[8].split("\t")[1] == ""
+
+
+def test_explicit_none_scale_keeps_pixel_units_even_with_scaled_legacy_keys() -> None:
+    info = _info("vessel.png", scaled=True)
+    result = info["result"]
+    assert isinstance(result, dict)
+    result["units"] = {"length": "px", "volume": "px3"}
+    result["mm_per_px"] = None
+
+    row = build_tsv_row(info, include_header=True)
+    table = build_tsv_table(info)
+
+    header, values = row.splitlines()
+    assert header.split("\t")[4].endswith("(px3)")
+    assert "mm/px" not in header
+    assert values.split("\t")[4] == "20.00"
+    assert "20.00\tpx3" in table
+    assert "mL" not in table
 
 
 def test_pixel_distance_keeps_legacy_helper_import_path() -> None:
