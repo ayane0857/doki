@@ -3,15 +3,53 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from pottery_scale import analyze_scale_candidates, classify_pottery_and_scale_with_candidates
-from pottery_volume_cli import AnalysisParams, analyze_detailed
+from pottery_scale import (
+    ScaleBarCandidate,
+    ScaleTextCandidate,
+    analyze_scale_candidates,
+    classify_pottery_and_scale_with_candidates,
+)
+from pottery_volume_cli import AnalysisOutput, AnalysisParams, analyze_detailed
 from pottery_volume_core import read_image
 
 logger = logging.getLogger(__name__)
+
+PairPaths = tuple[Path, Path]
+WorkerSource = Path | PairPaths
+PairResult = tuple[Path, Path, list[ScaleTextCandidate], list[ScaleBarCandidate]]
+
+
+@dataclass(frozen=True)
+class AnalysisFinished:
+    generation: int
+    output: AnalysisOutput
+
+
+@dataclass(frozen=True)
+class ScaleFinished:
+    generation: int
+    path: Path
+    labels: list[ScaleTextCandidate]
+    bars: list[ScaleBarCandidate]
+
+
+@dataclass(frozen=True)
+class PairFinished:
+    generation: int
+    paths: PairPaths
+    result: PairResult
+
+
+@dataclass(frozen=True)
+class WorkerFailed:
+    generation: int
+    source: WorkerSource
+    summary: str
 
 
 def _error_summary(error: Exception) -> str:
@@ -34,10 +72,16 @@ class AnalysisWorker(QObject):
     def run(self) -> None:
         try:
             output = analyze_detailed(self.params)
-            self.finished.emit((self.generation, output))
+            self.finished.emit(AnalysisFinished(self.generation, output))
         except Exception as exc:
             logger.exception("Analysis worker failed for %s", self.params.input_path)
-            self.failed.emit((self.generation, self.params.input_path, _error_summary(exc)))
+            self.failed.emit(
+                WorkerFailed(
+                    self.generation,
+                    self.params.input_path,
+                    _error_summary(exc),
+                )
+            )
 
 
 class ScaleWorker(QObject):
@@ -53,17 +97,19 @@ class ScaleWorker(QObject):
     def run(self) -> None:
         try:
             labels, bars = analyze_scale_candidates(read_image(self.path))
-            self.finished.emit((self.path, self.generation, labels, bars))
+            self.finished.emit(ScaleFinished(self.generation, self.path, labels, bars))
         except Exception as exc:
             logger.exception("Scale worker failed for %s", self.path)
-            self.failed.emit((self.path, self.generation, _error_summary(exc)))
+            self.failed.emit(
+                WorkerFailed(self.generation, self.path, _error_summary(exc))
+            )
 
 
 class PairWorker(QObject):
     finished = Signal(object)
     failed = Signal(object)
 
-    def __init__(self, paths: list[Path], generation: int) -> None:
+    def __init__(self, paths: PairPaths, generation: int) -> None:
         super().__init__()
         self.paths = paths
         self.generation = generation
@@ -72,7 +118,9 @@ class PairWorker(QObject):
     def run(self) -> None:
         try:
             result = classify_pottery_and_scale_with_candidates(*self.paths)
-            self.finished.emit((self.generation, result))
+            self.finished.emit(PairFinished(self.generation, self.paths, result))
         except Exception as exc:
             logger.exception("Pair worker failed for %s", self.paths)
-            self.failed.emit((self.generation, self.paths, _error_summary(exc)))
+            self.failed.emit(
+                WorkerFailed(self.generation, self.paths, _error_summary(exc))
+            )

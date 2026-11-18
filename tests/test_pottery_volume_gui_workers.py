@@ -10,7 +10,12 @@ import pytest
 pytest.importorskip("PySide6")
 
 from pottery_volume_cli import AnalysisParams
-from pottery_volume_gui_workers import AnalysisWorker, ScaleWorker, _error_summary
+from pottery_volume_gui_workers import (
+    AnalysisWorker,
+    ScaleWorker,
+    WorkerFailed,
+    _error_summary,
+)
 
 
 @pytest.mark.parametrize(
@@ -37,7 +42,9 @@ def test_scale_worker_failure_includes_source_and_generation(caplog, tmp_path: P
     with caplog.at_level(logging.ERROR, logger="pottery_volume_gui_workers"):
         worker.run()
 
-    assert failures == [(path, 27, f"ValueError: 画像を読み込めません: {path}")]
+    assert failures == [
+        WorkerFailed(27, path, f"ValueError: 画像を読み込めません: {path}")
+    ]
     assert any(record.exc_info for record in caplog.records)
 
 
@@ -50,5 +57,7 @@ def test_analysis_worker_failure_includes_generation_and_path(caplog, tmp_path: 
     with caplog.at_level(logging.ERROR, logger="pottery_volume_gui_workers"):
         worker.run()
 
-    assert failures == [(31, path, f"ValueError: 画像を読み込めません: {path}")]
+    assert failures == [
+        WorkerFailed(31, path, f"ValueError: 画像を読み込めません: {path}")
+    ]
     assert any(record.exc_info for record in caplog.records)

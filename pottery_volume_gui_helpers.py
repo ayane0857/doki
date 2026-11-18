@@ -6,10 +6,25 @@ import argparse
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, TypedDict, cast
 
-Info = Mapping[str, Any]
-Result = Mapping[str, Any]
+from pottery_volume_cli import AnalysisResult
+
+Result = AnalysisResult
+
+
+class Info(TypedDict):
+    """Analysis context consumed by TSV export helpers."""
+
+    title: str
+    image_name: str
+    image_path: str
+    result: Result
+
+
+TSVSource = Literal["result", "image_name", "outer_volume", "scale"]
+TSVUnit = Literal["", "length", "volume", "cm3", "percent", "scale"]
+TSVCondition = Literal["always", "never", "scaled", "scale_available"]
 
 
 class GUIArgumentParser(argparse.ArgumentParser):
@@ -25,13 +40,20 @@ class TSVItem:
 
     label: str
     result_key: str | None
-    unit: str
+    unit: TSVUnit
     decimals: int | None
     scaled_key: str | None = None
     alternate_key: str | None = None
-    source: str = "result"
-    row_condition: str = "always"
-    table_condition: str = "always"
+    source: TSVSource = "result"
+    row_condition: TSVCondition = "always"
+    table_condition: TSVCondition = "always"
+
+
+_SCALE_TSV_ITEM = TSVItem(
+    "スケール", "mm_per_px", "scale", 4,
+    alternate_key="scale_mm_per_px", source="scale",
+    row_condition="scaled", table_condition="scale_available",
+)
 
 
 TSV_ITEMS: tuple[TSVItem, ...] = (
@@ -51,11 +73,7 @@ TSV_ITEMS: tuple[TSVItem, ...] = (
         scaled_key="pappus_wall_volume_ml",
     ),
     TSVItem("パップス差", "pappus_difference_percent", "percent", 2),
-    TSVItem(
-        "スケール", "mm_per_px", "scale", 4,
-        alternate_key="scale_mm_per_px", source="scale",
-        row_condition="scaled", table_condition="scale_available",
-    ),
+    _SCALE_TSV_ITEM,
 )
 
 
@@ -63,20 +81,27 @@ class _OutputContext:
     def __init__(self, info: Info) -> None:
         self.info = info
         self.result: Result = info["result"]
-        self.is_scaled = "capacity_ml" in self.result
+        # Core results always carry mm_per_px; keep capacity_ml as a fallback
+        # for older hand-built TSV dictionaries that omit the canonical field.
+        if "mm_per_px" in self.result:
+            self.is_scaled = self.result["mm_per_px"] is not None
+            self.scale_value = self.result["mm_per_px"]
+        else:
+            legacy_result = cast(Mapping[str, Any], self.result)
+            self.is_scaled = "capacity_ml" in legacy_result
+            self.scale_value = legacy_result.get("scale_mm_per_px")
         self.length_unit = str(self.result["units"]["length"])
         self.volume_unit = str(self.result["units"]["volume"])
         self.row_volume_unit = self.volume_unit
         if self.is_scaled and self.volume_unit in {"mm3", "mm³"}:
             self.row_volume_unit = "mL"
-        scale_item = next(item for item in TSV_ITEMS if item.source == "scale")
-        self.scale_value = self.result.get(
-            scale_item.result_key or "",
-            self.result.get(scale_item.alternate_key or ""),
-        )
 
 
-def _include(item: TSVItem, context: _OutputContext, output: str) -> bool:
+def _include(
+    item: TSVItem,
+    context: _OutputContext,
+    output: Literal["row", "table"],
+) -> bool:
     condition = item.row_condition if output == "row" else item.table_condition
     if condition == "never":
         return False
@@ -88,22 +113,27 @@ def _include(item: TSVItem, context: _OutputContext, output: str) -> bool:
 
 
 def _item_value(item: TSVItem, context: _OutputContext) -> Any:
+    result = cast(Mapping[str, Any], context.result)
     if item.source == "image_name":
         return context.info["image_name"]
     if item.source == "scale":
         return context.scale_value
     if item.source == "outer_volume":
         if context.is_scaled:
-            return context.result["capacity_ml"] + context.result["wall_volume_ml"]
-        return context.result["capacity"] + context.result["wall_volume"]
+            return result["capacity_ml"] + result["wall_volume_ml"]
+        return result["capacity"] + result["wall_volume"]
 
     result_key = item.scaled_key if context.is_scaled and item.scaled_key else item.result_key
     if result_key is None:
         raise KeyError(f"TSV項目 {item.label!r} に結果キーがありません")
-    return context.result[result_key]
+    return result[result_key]
 
 
-def _item_unit(item: TSVItem, context: _OutputContext, output: str) -> str:
+def _item_unit(
+    item: TSVItem,
+    context: _OutputContext,
+    output: Literal["row", "table"],
+) -> str:
     if item.unit == "length":
         return context.length_unit
     if item.unit == "volume":
