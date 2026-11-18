@@ -6,13 +6,16 @@ import argparse
 import json
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import cv2
+import numpy as np
 
 from pottery_volume_core import (
     Profiles,
+    SectionResult,
     binarize_image,
     compute_volumes,
     detect_axis,
@@ -24,6 +27,21 @@ from pottery_volume_core import (
     remove_small_components,
     visualize,
 )
+
+
+@dataclass
+class AnalysisOutput:
+    """Full analysis state used by the GUI for manual profile corrections."""
+
+    args: argparse.Namespace
+    result: dict[str, Any]
+    section_mode: str
+    warnings: list[str]
+    image: np.ndarray
+    section: SectionResult
+    profiles: Profiles
+    mm_per_px: float | None
+
 
 def resolve_scale(args: argparse.Namespace, profiles: Profiles) -> float | None:
     """Resolve one of direct, known-distance, or known-height scale inputs."""
@@ -104,9 +122,11 @@ def resolve_scale(args: argparse.Namespace, profiles: Profiles) -> float | None:
     return None
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(
+    parser_class: type[argparse.ArgumentParser] = argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
-    parser = argparse.ArgumentParser(
+    parser = parser_class(
         description="土器実測図から回転軸対称を仮定して容量と器壁体積を推定します。"
     )
     parser.add_argument("input", type=Path, help="入力画像 (PNG/JPEGなど)")
@@ -192,11 +212,13 @@ def _print_result(
         print(f"警告: {warning}", file=sys.stderr)
 
 
-def analyze(
+def analyze_detailed(
     argv: list[str] | None = None,
-) -> tuple[argparse.Namespace, dict[str, Any], str, list[str]]:
-    """Analyze an image and return the parsed options, result, and warnings."""
-    parser = build_parser()
+    *,
+    parser_class: type[argparse.ArgumentParser] = argparse.ArgumentParser,
+) -> AnalysisOutput:
+    """Analyze an image and retain intermediate profiles for GUI editing."""
+    parser = build_parser(parser_class)
     args = parser.parse_args(argv)
     if args.closing_kernel < 1 or args.min_component_area < 1:
         parser.error("カーネルと最小連結成分面積は 1 以上で指定してください")
@@ -236,7 +258,17 @@ def analyze(
     )
     if args.debug_dir:
         visualize(image, axis_x, section, profiles, scale, args.debug_dir)
-    return args, result, section.mode, all_warnings
+    return AnalysisOutput(
+        args, result, section.mode, all_warnings, image, section, profiles, scale
+    )
+
+
+def analyze(
+    argv: list[str] | None = None,
+) -> tuple[argparse.Namespace, dict[str, Any], str, list[str]]:
+    """Analyze an image and return the parsed options, result, and warnings."""
+    output = analyze_detailed(argv)
+    return output.args, output.result, output.section_mode, output.warnings
 
 
 def main(argv: list[str] | None = None) -> int:

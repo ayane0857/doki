@@ -69,9 +69,9 @@ PyYAML
   https://pyyaml.org/
   https://github.com/yaml/pyyaml
 
-Tkinter
-  License: Python Software Foundation License / Tcl license terms
-  https://docs.python.org/3/library/tkinter.html
+PySide6
+  License: LGPL-3.0-only / GPL-3.0-only / commercial license
+  https://doc.qt.io/qtforpython-6/licenses.html
 
 PyInstaller
   Build tool; runtime exception in the PyInstaller license permits creation
