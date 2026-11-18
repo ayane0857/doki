@@ -104,14 +104,15 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
 
     from PySide6.QtWidgets import QApplication, QMessageBox
 
-    from pottery_volume_gui_style import APP_STYLESHEET
-    from pottery_volume_gui_window import MainWindow
-
     instance = QApplication.instance()
     app = instance if isinstance(instance, QApplication) else QApplication(sys.argv)
     app.setApplicationName("PotteryVolume")
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
+
+    from pottery_volume_gui_style import APP_STYLESHEET
+    from pottery_volume_gui_window import MainWindow
+
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLESHEET)
     window = MainWindow(initial_image)
