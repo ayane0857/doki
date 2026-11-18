@@ -71,6 +71,9 @@ dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe
 Linux/macOS では `build_exe.sh` を実行すると、同じ設定でアプリフォルダーを作成できます。
 スクリプトは共有ライブラリ付きPythonからビルド用のvenvを作成して使用します。
 
+配布フォルダーには `THIRD_PARTY_LICENSES.txt` を同梱します。GUIの
+「ライセンス表記」ボタンからも表示できます。
+
 ~~~bash
 bash build_exe.sh
 ~~~

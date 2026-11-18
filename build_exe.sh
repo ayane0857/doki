@@ -42,6 +42,7 @@ fi
     --windowed \
     --exclude-module pytest \
     --collect-all rapidocr \
+    --add-data "THIRD_PARTY_LICENSES.txt:." \
     --name PotteryVolume_ScaleOCR \
     --distpath dist \
     --workpath build \

@@ -373,6 +373,54 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
     title_is_automatic = True
     updating_automatic_title = False
 
+    def open_license_notice() -> None:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+
+        candidates = []
+        if getattr(sys, "frozen", False):
+            candidates.append(Path(sys._MEIPASS) / "THIRD_PARTY_LICENSES.txt")  # type: ignore[attr-defined]
+        candidates.append(Path(__file__).resolve().parent / "THIRD_PARTY_LICENSES.txt")
+
+        notice_path = next((path for path in candidates if path.is_file()), None)
+        if notice_path is None:
+            messagebox.showerror(
+                "ライセンス表記が見つかりません",
+                "THIRD_PARTY_LICENSES.txt が見つかりません。",
+                parent=root,
+            )
+            return
+
+        try:
+            notice_text = notice_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("ライセンス表記を開けません", str(exc), parent=root)
+            return
+
+        window = tk.Toplevel(root)
+        window.title("ライセンス表記")
+        window.geometry("760x620")
+        window.minsize(520, 360)
+        window.transient(root)
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+
+        text = tk.Text(window, wrap="word")
+        text.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(window, orient="vertical", command=text.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        text.configure(yscrollcommand=scrollbar.set)
+        text.insert("1.0", notice_text)
+        text.configure(state="disabled")
+        ttk.Button(window, text="閉じる", command=window.destroy).grid(
+            row=1, column=0, columnspan=2, pady=8
+        )
+
+    outer = ttk.Frame(root, padding=12)
+    outer.grid(row=0, column=0, sticky="nsew")
+    outer.columnconfigure(1, weight=1)
+    outer.rowconfigure(12, weight=1)
+
     def make_card(parent: tk.Widget, **grid_kwargs: object) -> tk.Frame:
         card = tk.Frame(
             parent,
@@ -2732,6 +2780,11 @@ def launch_gui(initial_image: str | Path | None = None) -> None:
         command=show_history,
     )
     history_button.grid(row=0, column=1, sticky="ns")
+    ttk.Button(
+        action_bar,
+        text="ライセンス表記",
+        command=open_license_notice,
+    ).grid(row=0, column=2, sticky="ns", padx=(4, 0))
 
     root.bind("<Return>", lambda _event: calculate())
     root.mainloop()

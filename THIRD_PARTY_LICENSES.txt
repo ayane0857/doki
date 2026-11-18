@@ -1,0 +1,78 @@
+Third-party license notice
+========================================
+
+This application bundles the following third-party software. The applicable
+copyright and license terms are retained in the package metadata and license
+files included in the distributed build where available.
+
+Python
+  Version: as included in the build
+  License: Python Software Foundation License Version 2
+  https://docs.python.org/3/license.html
+
+NumPy
+  Version: 2.5.4
+  License: BSD-3-Clause and additional licenses for bundled components
+  https://numpy.org/
+  https://github.com/numpy/numpy/blob/main/LICENSE.txt
+
+OpenCV
+  Version: 5.0.0.93
+  License: Apache-2.0
+  https://opencv.org/
+  https://github.com/opencv/opencv
+
+scikit-image
+  Version: 0.26.0
+  License: BSD-3-Clause
+  https://scikit-image.org/
+  https://github.com/scikit-image/scikit-image
+
+SciPy
+  Version: 1.18.1
+  License: BSD-3-Clause
+  https://scipy.org/
+  https://github.com/scipy/scipy
+
+Matplotlib
+  Version: 3.11.2
+  License: Matplotlib License (BSD-style)
+  https://matplotlib.org/
+  https://github.com/matplotlib/matplotlib
+
+RapidOCR
+  Version: 3.10.0
+  License: Apache-2.0
+  https://rapidai.github.io/RapidOCRDocs/
+  https://github.com/RapidAI/RapidOCR
+
+ONNX Runtime
+  Version: 1.31.1
+  License: MIT
+  https://onnxruntime.ai/
+  https://github.com/microsoft/onnxruntime
+
+Pillow
+  License: MIT-CMU
+  https://python-pillow.org/
+  https://github.com/python-pillow/Pillow
+
+PyYAML
+  License: MIT
+  https://pyyaml.org/
+  https://github.com/yaml/pyyaml
+
+Tkinter
+  License: Python Software Foundation License / Tcl license terms
+  https://docs.python.org/3/library/tkinter.html
+
+PyInstaller
+  Build tool; runtime exception in the PyInstaller license permits creation
+  and distribution of applications bundled with its bootloader.
+  License: GPL-2.0-or-later with a special exception
+  https://www.pyinstaller.org/
+  https://github.com/pyinstaller/pyinstaller
+
+This file is a notice for third-party components. Full upstream license text
+and notices can also be found in the corresponding source projects and in
+package metadata directories included by the build system.
