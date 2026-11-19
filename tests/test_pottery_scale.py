@@ -55,7 +55,7 @@ def test_detect_horizontal_scale_bars_and_endpoint_ticks():
 
 
 def test_real_scale_image_reads_ten_centimetres_and_scale_bar():
-    image = read_image(Path(__file__).parent / "fixtures" / "image.png")
+    image = read_image(Path(__file__).parent / "fixtures" / "scale_image.png")
 
     labels = recognize_scale_text(image)
     scale_label = next(
@@ -98,8 +98,8 @@ def test_confident_match_rejects_conflicting_labels():
 
 def test_classify_pottery_and_scale_with_fixture_images():
     fixtures_dir = Path(__file__).parent / "fixtures"
-    scale_path = fixtures_dir / "image.png"
-    pottery_path = fixtures_dir / "スクリーンショット 2026-11-10 215707.png"
+    scale_path = fixtures_dir / "scale_image.png"
+    pottery_path = fixtures_dir / "pottery_image.png"
 
     # 順序を反転させてテスト
     p1, s1 = classify_pottery_and_scale(scale_path, pottery_path)
@@ -113,7 +113,7 @@ def test_classify_pottery_and_scale_with_fixture_images():
 
 def test_extract_scale_from_image():
     fixtures_dir = Path(__file__).parent / "fixtures"
-    scale_img = read_image(fixtures_dir / "image.png")
+    scale_img = read_image(fixtures_dir / "scale_image.png")
 
     label, bar, mm_per_px = extract_scale_from_image(scale_img)
     assert label is not None
