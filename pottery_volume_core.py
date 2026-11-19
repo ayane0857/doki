@@ -77,9 +77,13 @@ def profile_section_polygon(
     """Build and validate the right-side vessel wall polygon from radial profiles."""
     if len(profiles.y_px) < 2:
         raise ValueError("断面輪郭をPolygonにするには2行以上必要です。")
-    if not np.all(np.isfinite(profiles.r_in_px)) or not np.all(np.isfinite(profiles.r_out_px)):
+    if not np.all(np.isfinite(profiles.r_in_px)) or not np.all(
+        np.isfinite(profiles.r_out_px)
+    ):
         raise ValueError("断面輪郭に無効な半径があります。")
-    if len(profiles.r_in_px) != len(profiles.y_px) or len(profiles.r_out_px) != len(profiles.y_px):
+    if len(profiles.r_in_px) != len(profiles.y_px) or len(profiles.r_out_px) != len(
+        profiles.y_px
+    ):
         raise ValueError("断面輪郭の行数が一致しません。")
 
     inner = [
@@ -138,13 +142,9 @@ def parse_crop(value: str) -> tuple[int, int, int, int]:
     try:
         vals = tuple(int(part.strip()) for part in value.split(","))
     except ValueError as exc:
-        raise ValueError(
-            "crop は x0,y0,x1,y1 の整数で指定してください"
-        ) from exc
+        raise ValueError("crop は x0,y0,x1,y1 の整数で指定してください") from exc
     if len(vals) != 4 or vals[2] <= vals[0] or vals[3] <= vals[1]:
-        raise ValueError(
-            "crop は x0,y0,x1,y1 の順で、幅と高さが正である必要があります"
-        )
+        raise ValueError("crop は x0,y0,x1,y1 の順で、幅と高さが正である必要があります")
     return (vals[0], vals[1], vals[2], vals[3])
 
 
@@ -153,9 +153,7 @@ def parse_points(value: str) -> tuple[float, float, float, float]:
     try:
         vals = tuple(float(part.strip()) for part in value.split(","))
     except ValueError as exc:
-        raise ValueError(
-            "点は x0,y0,x1,y1 の数値で指定してください"
-        ) from exc
+        raise ValueError("点は x0,y0,x1,y1 の数値で指定してください") from exc
     if len(vals) != 4:
         raise ValueError("点は x0,y0,x1,y1 の4値で指定してください")
     return (vals[0], vals[1], vals[2], vals[3])
@@ -232,7 +230,7 @@ def detect_axis(
     best_run = 0
     expected_center = width / 2.0
     _CENTER_PENALTY_WEIGHT = 0.35  # Penalise columns far from the image centre.
-    _CONTINUITY_WEIGHT = 0.08     # Reward dense columns with many foreground pixels.
+    _CONTINUITY_WEIGHT = 0.08  # Reward dense columns with many foreground pixels.
     for local_x in range(center_band.shape[1]):
         col = center_band[:, local_x]
         indices = np.flatnonzero(col)
@@ -244,7 +242,9 @@ def detect_axis(
         run = int(np.max(ends - starts + 1))
         count = int(len(indices))
         x = x_lo + local_x
-        center_penalty = abs(x - expected_center) / max(1, width) * _CENTER_PENALTY_WEIGHT
+        center_penalty = (
+            abs(x - expected_center) / max(1, width) * _CENTER_PENALTY_WEIGHT
+        )
         score = run + count * _CONTINUITY_WEIGHT - center_penalty * height
         if score > best_score:
             best_score, best_x, best_run = score, x, run
@@ -260,8 +260,8 @@ def detect_axis(
 
 def _largest_component(mask: np.ndarray) -> tuple[np.ndarray, list[int]]:
     """Return the largest connected component and the other component sizes."""
-    labels = label(mask > 0, connectivity=2)  # type: ignore[no-untyped-call]
-    props = regionprops(labels)  # type: ignore[no-untyped-call]
+    labels = label(mask > 0, connectivity=2)
+    props = regionprops(labels)
     if not props:
         return np.zeros(mask.shape, dtype=np.uint8), []
     props.sort(key=lambda item: item.area, reverse=True)
