@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -44,7 +45,12 @@ from pottery_scale import (
 )
 from pottery_volume_cli import AnalysisOutput, AnalysisParams
 from pottery_volume_core import compute_volumes, parse_crop, parse_points, visualize
-from pottery_volume_gui_helpers import Info, Result
+from pottery_volume_gui_helpers import (
+    Info,
+    Result,
+    build_tsv_row,
+    build_tsv_table,
+)
 from pottery_volume_gui_profiles import ProfileEditorDialog
 from pottery_volume_gui_scale import ImageDialog, ScaleCalibrationDialog
 from pottery_volume_gui_workers import (
@@ -363,6 +369,18 @@ class MainWindow(QMainWindow):
         self.profile_button.setEnabled(False)
         self.profile_button.clicked.connect(self.edit_profiles)
         action.addWidget(self.profile_button)
+        self.result_copy_buttons = []
+        for text, callback in (
+            ("TSV行をコピー", lambda: self._copy_last_info(build_tsv_row)),
+            ("見出し付きTSV行", lambda: self._copy_last_info(build_tsv_row, True)),
+            ("縦テーブルをコピー", lambda: self._copy_last_info(build_tsv_table)),
+            ("テキスト要約をコピー", self._copy_text_summary),
+        ):
+            button = QPushButton(text)
+            button.setEnabled(False)
+            button.clicked.connect(callback)
+            action.addWidget(button)
+            self.result_copy_buttons.append(button)
         outer.addLayout(action)
         self._update_scale_fields(self.scale_mode.currentText())
 
@@ -412,7 +430,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "画像が見つかりません", str(path))
             return
         try:
-            ImageDialog(path, kind, self).exec()
+            dialog = ImageDialog(path, kind, self)
+            dialog.exec()
+            dialog.deleteLater()
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "画像を表示できません", str(exc))
 
@@ -620,11 +640,17 @@ class MainWindow(QMainWindow):
                 default_mm = None
             dialog = ScaleCalibrationDialog(path, labels, bars, default_mm, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
+                dialog.deleteLater()
                 return
             if dialog.mm_per_px is None or dialog.line_pixels is None:
+                dialog.deleteLater()
                 raise ValueError("換算値を計算できませんでした。")
-            self.direct_edit.setText(f"{dialog.mm_per_px:.10g}")
-            self.bar_px_edit.setText(f"{dialog.line_pixels:.2f}")
+            mm_per_px = dialog.mm_per_px
+            line_pixels = dialog.line_pixels
+            dialog.deleteLater()
+            self.scale_generation += 1
+            self.direct_edit.setText(f"{mm_per_px:.10g}")
+            self.bar_px_edit.setText(f"{line_pixels:.2f}")
             self.scale_mode.setCurrentText("mm/px を直接指定")
             self.status.setText(
                 f"手動確認したスケールを設定しました: {dialog.mm_per_px:.6g} mm/px"
@@ -758,8 +784,17 @@ class MainWindow(QMainWindow):
         input_path = payload.source
         generation = payload.generation
         message = payload.summary
-        self.profile_button.setEnabled(self.current_analysis is not None)
         current_text = self.image_edit.text().strip().strip('"')
+        if self.current_analysis is not None:
+            retained_path = self.current_analysis.params.input_path
+            same_retained_image = bool(current_text) and self._same_path(
+                retained_path, Path(current_text)
+            )
+        else:
+            same_retained_image = False
+        self.profile_button.setEnabled(same_retained_image)
+        for button in self.result_copy_buttons:
+            button.setEnabled(same_retained_image)
         if (
             generation != self.analysis_generation
             or not current_text
@@ -780,7 +815,14 @@ class MainWindow(QMainWindow):
             or not current_text
             or not self._same_path(output.params.input_path, Path(current_text))
         ):
-            self.profile_button.setEnabled(self.current_analysis is not None)
+            same_retained_image = False
+            if self.current_analysis is not None and current_text:
+                same_retained_image = self._same_path(
+                    self.current_analysis.params.input_path, Path(current_text)
+                )
+            self.profile_button.setEnabled(same_retained_image)
+            for button in self.result_copy_buttons:
+                button.setEnabled(same_retained_image)
             self.status.setText("画像が変更されたため、古い解析結果を破棄しました。")
             return
         self.current_analysis = output
@@ -799,11 +841,25 @@ class MainWindow(QMainWindow):
         if output.params.json_out:
             try:
                 output.params.json_out.parent.mkdir(parents=True, exist_ok=True)
-                output.params.json_out.write_text(
-                    json.dumps(result, ensure_ascii=False, indent=2),
+                temp_path: Path | None = None
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
                     encoding="utf-8",
-                )
+                    dir=output.params.json_out.parent,
+                    prefix=f".{output.params.json_out.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temp_file:
+                    temp_path = Path(temp_file.name)
+                    json.dump(result, temp_file, ensure_ascii=False, indent=2)
+                    temp_file.flush()
+                temp_path.replace(output.params.json_out)
             except (OSError, UnicodeError) as exc:
+                if "temp_path" in locals() and temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 QMessageBox.warning(self, "JSON save failed", str(exc))
         self.last_info = {
             "title": path.stem,
@@ -850,10 +906,45 @@ class MainWindow(QMainWindow):
         self.status.setText(
             f"\u8a08\u7b97\u5b8c\u4e86: \u5bb9\u91cf {capacity:.2f} {unit}"
         )
+        for button in self.result_copy_buttons:
+            button.setEnabled(True)
+
+    def _copy_last_info(
+        self,
+        formatter: Any,
+        include_header: bool = False,
+    ) -> None:
+        if self.last_info is None:
+            return
+        try:
+            text = (
+                formatter(self.last_info, include_header)
+                if include_header
+                else formatter(self.last_info)
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "コピーできません", str(exc))
+            return
+        QApplication.clipboard().setText(text)
+
+    def _copy_text_summary(self) -> None:
+        if self.last_info is None:
+            return
+        QApplication.clipboard().setText(self.details_label.text())
 
     def edit_profiles(self) -> None:
         output = self.current_analysis
         if output is None:
+            return
+        current_text = self.image_edit.text().strip().strip('"')
+        if not current_text or not self._same_path(
+            output.params.input_path, Path(current_text)
+        ):
+            QMessageBox.warning(
+                self,
+                "画像が一致しません",
+                "表示中の画像と解析結果の画像が一致しないため輪郭を編集できません。",
+            )
             return
         dialog = ProfileEditorDialog(
             output.profiles,
@@ -862,21 +953,30 @@ class MainWindow(QMainWindow):
             self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            dialog.deleteLater()
             return
         try:
-            output.profiles = dialog.corrected_profiles
+            corrected_profiles = dialog.corrected_profiles
+            dialog.deleteLater()
             recomputed = compute_volumes(
-                output.profiles,
+                corrected_profiles,
                 output.section.mask,
                 float(output.result["axis_x_px"]),
                 output.mm_per_px,
                 output.section_mode,
             )
-            cast(dict[str, Any], output.result).update(cast(dict[str, Any], recomputed))
-            output.warnings.append(
-                "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(
+                self, "\u518d\u8a08\u7b97\u3067\u304d\u307e\u305b\u3093", str(exc)
             )
-            if output.params.debug_dir:
+            return
+        output.profiles = corrected_profiles
+        cast(dict[str, Any], output.result).update(cast(dict[str, Any], recomputed))
+        output.warnings.append(
+            "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
+        )
+        if output.params.debug_dir:
+            try:
                 visualize(
                     output.image,
                     float(output.result["axis_x_px"]),
@@ -885,11 +985,12 @@ class MainWindow(QMainWindow):
                     output.mm_per_px,
                     output.params.debug_dir,
                 )
-        except (OSError, ValueError) as exc:
-            QMessageBox.critical(
-                self, "\u518d\u8a08\u7b97\u3067\u304d\u307e\u305b\u3093", str(exc)
-            )
-            return
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "\u30c7\u30d0\u30c3\u30b0\u51fa\u529b\u3067\u304d\u307e\u305b\u3093",
+                    str(exc),
+                )
         self._refresh_result()
         if self.history:
             self.history[-1] = self._history_row(
@@ -946,6 +1047,7 @@ class MainWindow(QMainWindow):
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
         dialog.exec()
+        dialog.deleteLater()
 
     def show_license(self) -> None:
         meipass = getattr(sys, "_MEIPASS", None)
@@ -968,3 +1070,4 @@ class MainWindow(QMainWindow):
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
         dialog.exec()
+        dialog.deleteLater()

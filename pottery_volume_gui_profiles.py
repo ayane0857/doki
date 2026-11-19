@@ -198,6 +198,9 @@ class ProfileEditorDialog(QDialog):
         self.setWindowTitle("断面輪郭を画像上で手動補正")
         self.resize(1180, 720)
         self.corrected_profiles = profiles
+        self.baseline_y = profiles.y_px.copy()
+        self.baseline_inner = profiles.r_in_px.copy()
+        self.baseline_outer = profiles.r_out_px.copy()
         sample_indices = np.unique(
             np.linspace(0, len(profiles.y_px) - 1, min(40, len(profiles.y_px)))
             .round()
@@ -206,6 +209,10 @@ class ProfileEditorDialog(QDialog):
         self.sample_y = profiles.y_px[sample_indices]
         self.inner_values = profiles.r_in_px[sample_indices].copy()
         self.outer_values = profiles.r_out_px[sample_indices].copy()
+        self.original_inner_values = self.inner_values.copy()
+        self.original_outer_values = self.outer_values.copy()
+        self.edited_inner_indices: set[int] = set()
+        self.edited_outer_indices: set[int] = set()
         self.point_history: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
@@ -314,11 +321,21 @@ class ProfileEditorDialog(QDialog):
                 index,
                 np.interp(y, self.sample_y, self.outer_values),
             )
+            baseline_inner_at_y = float(np.interp(y, self.baseline_y, self.baseline_inner))
+            baseline_outer_at_y = float(np.interp(y, self.baseline_y, self.baseline_outer))
+            self.original_inner_values = np.insert(
+                self.original_inner_values, index, baseline_inner_at_y
+            )
+            self.original_outer_values = np.insert(
+                self.original_outer_values, index, baseline_outer_at_y
+            )
             self.sample_y = new_y
         if is_inner:
             self.inner_values[index] = min(radius, self.outer_values[index] - 0.25)
+            self.edited_inner_indices.add(index)
         else:
             self.outer_values[index] = max(radius, self.inner_values[index] + 0.25)
+            self.edited_outer_indices.add(index)
         self._populate_table()
         self.canvas.set_profiles(self.sample_y, self.inner_values, self.outer_values)
 
@@ -326,6 +343,14 @@ class ProfileEditorDialog(QDialog):
         if not self.point_history:
             return
         self.sample_y, self.inner_values, self.outer_values = self.point_history.pop()
+        self.original_inner_values = np.asarray([
+            np.interp(y, self.baseline_y, self.baseline_inner) for y in self.sample_y
+        ])
+        self.original_outer_values = np.asarray([
+            np.interp(y, self.baseline_y, self.baseline_outer) for y in self.sample_y
+        ])
+        self.edited_inner_indices.clear()
+        self.edited_outer_indices.clear()
         self._populate_table()
         self.canvas.set_profiles(self.sample_y, self.inner_values, self.outer_values)
         self.undo_point_button.setEnabled(bool(self.point_history))
@@ -339,10 +364,28 @@ class ProfileEditorDialog(QDialog):
             return
         if np.any(inner < 0) or np.any(outer <= inner):
             return
+        if _column == 1:
+            self.edited_inner_indices.update(
+                index for index, (before, after) in enumerate(zip(self.original_inner_values, inner))
+                if before != after
+            )
+        if _column == 2:
+            self.edited_outer_indices.update(
+                index for index, (before, after) in enumerate(zip(self.original_outer_values, outer))
+                if before != after
+            )
         self.inner_values, self.outer_values = inner, outer
         self.canvas.set_profiles(self.sample_y, inner, outer)
 
     def _canvas_changed(self, inner: np.ndarray, outer: np.ndarray) -> None:
+        self.edited_inner_indices.update(
+            index for index, (before, after) in enumerate(zip(self.original_inner_values, inner))
+            if before != after
+        )
+        self.edited_outer_indices.update(
+            index for index, (before, after) in enumerate(zip(self.original_outer_values, outer))
+            if before != after
+        )
         self.table.blockSignals(True)
         for row, (inner_value, outer_value) in enumerate(zip(inner, outer)):
             inner_item = self.table.item(row, 1)
@@ -361,9 +404,43 @@ class ProfileEditorDialog(QDialog):
                 raise ValueError("半径は有限の数値で入力してください。")
             if np.any(inner < 0) or np.any(outer <= inner):
                 raise ValueError("外面半径は内面半径より大きくしてください。")
-            y_px = self.corrected_profiles.y_px
-            corrected_inner = np.interp(y_px, self.sample_y, inner)
-            corrected_outer = np.interp(y_px, self.sample_y, outer)
+            y_px = self.baseline_y
+
+            def apply_deltas(
+                baseline: np.ndarray,
+                edited_indices: set[int],
+                control_values: np.ndarray,
+                original_control_values: np.ndarray,
+            ) -> np.ndarray:
+                if not edited_indices:
+                    return baseline.copy()
+                edit_y = self.sample_y[np.asarray(sorted(edited_indices))]
+                edit_delta = (
+                    control_values[np.asarray(sorted(edited_indices))]
+                    - original_control_values[np.asarray(sorted(edited_indices))]
+                )
+                delta = np.interp(
+                    y_px,
+                    edit_y,
+                    edit_delta,
+                    left=edit_delta[0],
+                    right=edit_delta[-1],
+                )
+                corrected = baseline + delta
+                return np.where(corrected < 0, 0.0, corrected)
+
+            corrected_inner = apply_deltas(
+                self.baseline_inner,
+                self.edited_inner_indices,
+                inner,
+                self.original_inner_values,
+            )
+            corrected_outer = apply_deltas(
+                self.baseline_outer,
+                self.edited_outer_indices,
+                outer,
+                self.original_outer_values,
+            )
             self.corrected_profiles = apply_profile_overrides(
                 self.corrected_profiles,
                 corrected_inner,

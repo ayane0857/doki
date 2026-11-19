@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 python -m pip install -r requirements-dev.txt
 if errorlevel 1 exit /b %errorlevel%
-python -m PyInstaller --noconfirm --clean --onedir --windowed --exclude-module pytest --collect-all rapidocr --add-data "THIRD_PARTY_LICENSES.txt;." --name PotteryVolume_ScaleOCR --distpath dist --workpath build pottery_volume_gui.pyw
+python -m PyInstaller --noconfirm --clean --onedir --windowed --exclude-module pytest --collect-all rapidocr --collect-all PySide6 --collect-all shapely --add-data "THIRD_PARTY_LICENSES.txt;." --name PotteryVolume_ScaleOCR --distpath dist --workpath build pottery_volume_gui.pyw
 if errorlevel 1 exit /b %errorlevel%
 echo.
 echo Built: %~dp0dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe

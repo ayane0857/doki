@@ -132,20 +132,23 @@ def detect_horizontal_scale_bars(
         return []
 
     # Adaptive thresholding handles faded rails and uneven paper lighting.
+    edge_gray = gray
     if min(height, width) >= 3:
-        gray = cv2.medianBlur(gray, 3)
+        filtered_gray = cv2.medianBlur(gray, 3)
+    else:
+        filtered_gray = gray
     block_size = max(15, (min(height, width) // 8) | 1)
     if block_size >= min(height, width):
         block_size = max(3, (min(height, width) - 1) | 1)
     adaptive = cv2.adaptiveThreshold(
-        gray,
+        filtered_gray,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
         block_size,
         7,
     )
-    edges = cv2.Canny(gray, 35, 120, apertureSize=3)
+    edges = cv2.Canny(edge_gray, 35, 120, apertureSize=3)
     min_length = max(24, int(width * 0.07))
     lines = cv2.HoughLinesP(
         edges,
@@ -427,31 +430,55 @@ def has_confident_scale_match(
     if not labels or not bars:
         return False
 
-    label = labels[0]
-    if label.confidence < 0.60:
+    confident_labels = [label for label in labels if label.confidence >= 0.60]
+    if not confident_labels:
         return False
-    lx0, ly0, lx1, ly1 = label.bounds
-    if lx1 <= lx0 or ly1 <= ly0:
-        return False
-    label_width = max(1.0, lx1 - lx0)
-    label_height = max(1.0, ly1 - ly0)
 
     plausible: list[ScaleBarCandidate] = []
     for bar in bars:
         if bar.confidence < 0.82 or bar.tick_support < 1:
             continue
-        if bar.pixels < max(24.0, label_width * 1.5):
-            continue
         bar_y = (bar.y1 + bar.y2) / 2
-        horizontal_gap = max(lx0 - bar.x2, bar.x1 - lx1, 0.0)
-        vertical_gap = max(ly0 - bar_y, bar_y - ly1, 0.0)
-        if horizontal_gap > max(32.0, label_width * 1.25):
-            continue
-        if vertical_gap > max(24.0, label_height * 2.0):
-            continue
-        plausible.append(bar)
+        supported_by: list[ScaleTextCandidate] = []
+        for label in confident_labels:
+            lx0, ly0, lx1, ly1 = label.bounds
+            if lx1 <= lx0 or ly1 <= ly0:
+                continue
+            label_width = max(1.0, lx1 - lx0)
+            label_height = max(1.0, ly1 - ly0)
+            if bar.pixels < max(24.0, label_width * 1.5):
+                continue
+            horizontal_gap = max(lx0 - bar.x2, bar.x1 - lx1, 0.0)
+            vertical_gap = max(ly0 - bar_y, bar_y - ly1, 0.0)
+            if horizontal_gap > max(32.0, label_width * 1.25):
+                continue
+            if vertical_gap > max(24.0, label_height * 2.0):
+                continue
+            supported_by.append(label)
+        if supported_by:
+            plausible.append(bar)
 
-    return len(plausible) == 1 and plausible[0] == bars[0]
+    if len(plausible) != 1 or plausible[0] != bars[0]:
+        return False
+
+    best_bar = plausible[0]
+    bar_y = (best_bar.y1 + best_bar.y2) / 2
+    supporting_labels: list[ScaleTextCandidate] = []
+    for label in confident_labels:
+        lx0, ly0, lx1, ly1 = label.bounds
+        if lx1 <= lx0 or ly1 <= ly0:
+            continue
+        label_width = max(1.0, lx1 - lx0)
+        label_height = max(1.0, ly1 - ly0)
+        if best_bar.pixels < max(24.0, label_width * 1.5):
+            continue
+        horizontal_gap = max(lx0 - best_bar.x2, best_bar.x1 - lx1, 0.0)
+        vertical_gap = max(ly0 - bar_y, bar_y - ly1, 0.0)
+        if horizontal_gap <= max(32.0, label_width * 1.25) and vertical_gap <= max(24.0, label_height * 2.0):
+            supporting_labels.append(label)
+
+    distinct_lengths = {round(label.length_mm, 6) for label in supporting_labels}
+    return len(distinct_lengths) == 1
 
 
 def analyze_scale_candidates(

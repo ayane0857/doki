@@ -114,8 +114,10 @@ class _OutputContext:
             self.scale_value = legacy_result.get("scale_mm_per_px")
         self.length_unit = str(self.result["units"]["length"])
         self.volume_unit = str(self.result["units"]["volume"])
-        # Scaled results read from the *_ml keys, so the unit is always mL.
-        self.row_volume_unit = "mL" if self.is_scaled else self.volume_unit
+        legacy_scaled = "mm_per_px" not in self.result and "scale_mm_per_px" in self.result
+        # Legacy exports keep the unit stored with them. Canonical exports
+        # read the *_ml fields and therefore use mL in the row headers.
+        self.row_volume_unit = self.volume_unit if legacy_scaled else ("mL" if self.is_scaled else self.volume_unit)
 
 
 def _include(

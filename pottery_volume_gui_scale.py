@@ -69,6 +69,7 @@ class ScaleCanvas(QWidget):
         self.pixmap = QPixmap.fromImage(qimage)
         self._rendered_pixmap: Any = None
         self._rendered_size = (0, 0)
+        self._rendered_source = (0, 0, 0, 0)
         self.scale = min(1.0, 800 / self.image_width, 560 / self.image_height)
         self.offset_x = 12.0
         self.offset_y = 12.0
@@ -120,6 +121,8 @@ class ScaleCanvas(QWidget):
     def _display_points(self) -> list[tuple[float, float]]:
         if len(self.manual_points) == 2:
             return self.manual_points
+        if len(self.manual_points) == 1:
+            return []
         if 0 <= self.selected_index < len(self.bars):
             bar = self.bars[self.selected_index]
             return [(bar.x1, bar.y1), (bar.x2, bar.y2)]
@@ -132,16 +135,36 @@ class ScaleCanvas(QWidget):
         )
 
     def _scaled_image(self) -> Any:
-        size = (
-            max(1, round(self.image_width * self.scale)),
-            max(1, round(self.image_height * self.scale)),
+        visible_x0 = max(0, int(math.floor(-self.offset_x / self.scale)))
+        visible_y0 = max(0, int(math.floor(-self.offset_y / self.scale)))
+        visible_x1 = min(
+            self.image_width,
+            int(math.ceil((self.width() - self.offset_x) / self.scale)),
         )
-        if size != self._rendered_size:
-            self._rendered_pixmap = self.pixmap.scaled(
-                *size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+        visible_y1 = min(
+            self.image_height,
+            int(math.ceil((self.height() - self.offset_y) / self.scale)),
+        )
+        if visible_x1 <= visible_x0 or visible_y1 <= visible_y0:
+            visible_x0, visible_y0 = 0, 0
+            visible_x1, visible_y1 = self.image_width, self.image_height
+        source = (visible_x0, visible_y0, visible_x1 - visible_x0, visible_y1 - visible_y0)
+        size = (
+            max(1, round(source[2] * self.scale)),
+            max(1, round(source[3] * self.scale)),
+        )
+        if source != self._rendered_source or size != self._rendered_size:
+            source_pixmap = self.pixmap.copy(
+                source[0], source[1], source[2], source[3]
             )
+            self._rendered_pixmap = source_pixmap.scaled(
+                *size,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._rendered_source = source
             self._rendered_size = size
-        return self._rendered_pixmap
+        return self._rendered_pixmap, source
 
     @staticmethod
     def _segment_distance(point: QPointF, start: QPointF, end: QPointF) -> float:
@@ -155,8 +178,13 @@ class ScaleCanvas(QWidget):
     def paintEvent(self, _event: Any) -> None:
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#172033"))
-        shown = self._scaled_image()
-        painter.drawPixmap(round(self.offset_x), round(self.offset_y), shown)
+        shown, source = self._scaled_image()
+        source_x, source_y, _source_width, _source_height = source
+        painter.drawPixmap(
+            round(self.offset_x + source_x * self.scale),
+            round(self.offset_y + source_y * self.scale),
+            shown,
+        )
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         for label in self.labels:
