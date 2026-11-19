@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
+import pottery_volume_gui_workers as workers_module
 from pottery_volume_cli import AnalysisParams
 from pottery_volume_gui_workers import (
     AnalysisFinished,
@@ -23,7 +24,6 @@ from pottery_volume_gui_workers import (
     WorkerFailed,
     _error_summary,
 )
-import pottery_volume_gui_workers as workers_module
 
 
 @pytest.mark.parametrize(

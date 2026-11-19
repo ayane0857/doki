@@ -6,14 +6,16 @@ import math
 
 import pytest
 
+from pottery_volume_geometry import pixel_distance
 from pottery_volume_gui_helpers import (
     GUIArgumentParser,
+    _format_value,
     build_tsv_row,
     build_tsv_table,
-    pixel_distance as helper_pixel_distance,
-    _format_value,
 )
-from pottery_volume_geometry import pixel_distance
+from pottery_volume_gui_helpers import (
+    pixel_distance as helper_pixel_distance,
+)
 
 
 def _info(image_name: str, *, scaled: bool = True) -> dict[str, object]:

@@ -138,9 +138,9 @@ class ProfileCanvas(QWidget):
             for side in (-1.0, 1.0):
                 points = [
                     self._screen(float(radius), float(y), side)
-                    for y, radius in zip(self.sample_y, values)
+                    for y, radius in zip(self.sample_y, values, strict=False)
                 ]
-                for start, end in zip(points, points[1:]):
+                for start, end in zip(points, points[1:], strict=False):
                     painter.drawLine(start, end)
                 painter.setBrush(QColor("#ffffff"))
                 for point in points:
@@ -163,7 +163,7 @@ class ProfileCanvas(QWidget):
                 self.on_add_point(image_y, abs(image_x - self.axis_x), self.add_inner)
             return
         best: tuple[float, int, bool, float] | None = None
-        for index, (row_y, inner, outer) in enumerate(zip(self.sample_y, self.inner, self.outer)):
+        for index, (row_y, inner, outer) in enumerate(zip(self.sample_y, self.inner, self.outer, strict=False)):
             for is_inner, radius in ((True, inner), (False, outer)):
                 for side in (-1.0, 1.0):
                     point = self._screen(float(radius), float(row_y), side)
@@ -278,7 +278,7 @@ class ProfileEditorDialog(QDialog):
     def _populate_table(self) -> None:
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.sample_y))
-        for row, (y, inner, outer) in enumerate(zip(self.sample_y, self.inner_values, self.outer_values)):
+        for row, (y, inner, outer) in enumerate(zip(self.sample_y, self.inner_values, self.outer_values, strict=False)):
             values = (y, inner, outer)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(f"{value:.2f}")
@@ -366,12 +366,12 @@ class ProfileEditorDialog(QDialog):
             return
         if _column == 1:
             self.edited_inner_indices.update(
-                index for index, (before, after) in enumerate(zip(self.original_inner_values, inner))
+                index for index, (before, after) in enumerate(zip(self.original_inner_values, inner, strict=False))
                 if before != after
             )
         if _column == 2:
             self.edited_outer_indices.update(
-                index for index, (before, after) in enumerate(zip(self.original_outer_values, outer))
+                index for index, (before, after) in enumerate(zip(self.original_outer_values, outer, strict=False))
                 if before != after
             )
         self.inner_values, self.outer_values = inner, outer
@@ -379,15 +379,15 @@ class ProfileEditorDialog(QDialog):
 
     def _canvas_changed(self, inner: np.ndarray, outer: np.ndarray) -> None:
         self.edited_inner_indices.update(
-            index for index, (before, after) in enumerate(zip(self.original_inner_values, inner))
+            index for index, (before, after) in enumerate(zip(self.original_inner_values, inner, strict=False))
             if before != after
         )
         self.edited_outer_indices.update(
-            index for index, (before, after) in enumerate(zip(self.original_outer_values, outer))
+            index for index, (before, after) in enumerate(zip(self.original_outer_values, outer, strict=False))
             if before != after
         )
         self.table.blockSignals(True)
-        for row, (inner_value, outer_value) in enumerate(zip(inner, outer)):
+        for row, (inner_value, outer_value) in enumerate(zip(inner, outer, strict=False)):
             inner_item = self.table.item(row, 1)
             outer_item = self.table.item(row, 2)
             if inner_item is not None:
@@ -414,10 +414,11 @@ class ProfileEditorDialog(QDialog):
             ) -> np.ndarray:
                 if not edited_indices:
                     return baseline.copy()
-                edit_y = self.sample_y[np.asarray(sorted(edited_indices))]
+                edit_indices = sorted(edited_indices)
+                edit_y = self.sample_y[edit_indices]
                 edit_delta = (
-                    control_values[np.asarray(sorted(edited_indices))]
-                    - original_control_values[np.asarray(sorted(edited_indices))]
+                    control_values[edit_indices]
+                    - original_control_values[edit_indices]
                 )
                 delta = np.interp(
                     y_px,

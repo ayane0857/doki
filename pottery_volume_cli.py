@@ -7,9 +7,10 @@ import json
 import math
 import sys
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, cast
 
 import cv2
 import numpy as np

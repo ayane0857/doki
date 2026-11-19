@@ -10,6 +10,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from pottery_volume_geometry import pixel_distance
 from pottery_volume_gui_helpers import (
     GUIArgumentParser,
     Info,
@@ -17,7 +18,6 @@ from pottery_volume_gui_helpers import (
     build_tsv_row,
     build_tsv_table,
 )
-from pottery_volume_geometry import pixel_distance
 
 
 def _configure_logging() -> Path | None:
@@ -54,7 +54,7 @@ def _configure_logging() -> Path | None:
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
         )
-        setattr(handler, "_pottery_volume_log", True)
+        handler._pottery_volume_log = True  # pyright: ignore[reportAttributeAccessIssue]
         root_logger.addHandler(handler)
         root_logger.setLevel(logging.INFO)
         return directory / "pottery_volume.log"

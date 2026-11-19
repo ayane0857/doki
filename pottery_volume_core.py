@@ -5,14 +5,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NotRequired, TypedDict, cast
+from typing import NotRequired, TypedDict
 
 import cv2
 import numpy as np
-from shapely.geometry import Polygon
-from shapely.validation import explain_validity
 from scipy.integrate import trapezoid
 from scipy.signal import savgol_filter
+from shapely.geometry import Polygon
+from shapely.validation import explain_validity
 from skimage.measure import label, regionprops
 
 
@@ -84,11 +84,11 @@ def profile_section_polygon(
 
     inner = [
         (axis_x + float(radius), float(y))
-        for y, radius in zip(profiles.y_px, profiles.r_in_px)
+        for y, radius in zip(profiles.y_px, profiles.r_in_px, strict=False)
     ]
     outer = [
         (axis_x + float(radius), float(y))
-        for y, radius in zip(profiles.y_px, profiles.r_out_px)
+        for y, radius in zip(profiles.y_px, profiles.r_out_px, strict=False)
     ]
     polygon = Polygon(inner + list(reversed(outer)))
     if polygon.is_empty or polygon.area <= 0:
@@ -145,7 +145,7 @@ def parse_crop(value: str) -> tuple[int, int, int, int]:
         raise ValueError(
             "crop は x0,y0,x1,y1 の順で、幅と高さが正である必要があります"
         )
-    return cast(tuple[int, int, int, int], vals)
+    return (vals[0], vals[1], vals[2], vals[3])
 
 
 def parse_points(value: str) -> tuple[float, float, float, float]:
@@ -158,7 +158,7 @@ def parse_points(value: str) -> tuple[float, float, float, float]:
         ) from exc
     if len(vals) != 4:
         raise ValueError("点は x0,y0,x1,y1 の4値で指定してください")
-    return cast(tuple[float, float, float, float], vals)
+    return (vals[0], vals[1], vals[2], vals[3])
 
 
 def binarize_image(gray: np.ndarray, adaptive: bool = False) -> tuple[np.ndarray, str]:
@@ -222,7 +222,7 @@ def detect_axis(
 
     x_lo, x_hi = int(width * 0.28), max(int(width * 0.72), int(width * 0.28) + 1)
     y_lo, y_hi = int(height * 0.04), max(int(height * 0.96), int(height * 0.04) + 1)
-    center_band = (binary[y_lo:y_hi, x_lo:x_hi] > 0).astype(np.uint8)
+    center_band: np.ndarray = (binary[y_lo:y_hi, x_lo:x_hi] > 0).astype(np.uint8)
     # Bridge very short breaks in the axis before scoring each column.
     center_band = cv2.morphologyEx(
         center_band, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 5))
@@ -260,8 +260,8 @@ def detect_axis(
 
 def _largest_component(mask: np.ndarray) -> tuple[np.ndarray, list[int]]:
     """Return the largest connected component and the other component sizes."""
-    labels = label(mask > 0, connectivity=2)
-    props = regionprops(labels)
+    labels = label(mask > 0, connectivity=2)  # type: ignore[no-untyped-call]
+    props = regionprops(labels)  # type: ignore[no-untyped-call]
     if not props:
         return np.zeros(mask.shape, dtype=np.uint8), []
     props.sort(key=lambda item: item.area, reverse=True)
@@ -306,8 +306,8 @@ def extract_section(
     enclosed_area = int(np.count_nonzero(enclosed))
     roi_area = roi.shape[0] * roi.shape[1]
 
-    enclosed_labels = label(enclosed > 0, connectivity=2)
-    enclosed_props = regionprops(enclosed_labels)
+    enclosed_labels = label(enclosed > 0, connectivity=2)  # type: ignore[no-untyped-call]
+    enclosed_props = regionprops(enclosed_labels)  # type: ignore[no-untyped-call]
     enclosed_height = max(
         (prop.bbox[2] - prop.bbox[0] for prop in enclosed_props), default=0
     )
@@ -357,8 +357,8 @@ def extract_section(
         line_source[:, :3] = (
             0  # remove the long axis stroke and antialiased edge pixels
         )
-        line_labels = np.asarray(label(line_source > 0, connectivity=2))
-        line_props = regionprops(line_labels)
+        line_labels = np.asarray(label(line_source > 0, connectivity=2))  # type: ignore[no-untyped-call]
+        line_props = regionprops(line_labels)  # type: ignore[no-untyped-call]
         min_span = max(8, int(roi.shape[0] * 0.20))
         long_labels = [
             prop.label
@@ -490,11 +490,12 @@ def extract_profiles(
         # Build a filled strip from the traced raw profiles for overlay and Pappus
         # moments. The radii themselves remain available in the smoothed arrays.
         area_mask = np.zeros_like(section.mask)
-        for y, inner_radius, outer_radius in zip(y_px, r_in, r_out):
+        for y_value, inner_radius, outer_radius in zip(y_px, r_in, r_out, strict=False):
+            y_index = int(y_value)
             x0 = max(int(math.ceil(axis_x + inner_radius)), int(math.floor(axis_x)) + 1)
             x1 = max(x0, int(math.floor(axis_x + outer_radius)))
-            if 0 <= int(y) < area_mask.shape[0] and x0 < area_mask.shape[1]:
-                area_mask[int(y), x0 : min(x1 + 1, area_mask.shape[1])] = 255
+            if 0 <= y_index < area_mask.shape[0] and x0 < area_mask.shape[1]:
+                area_mask[y_index, x0 : min(x1 + 1, area_mask.shape[1])] = 255
         section.mask = area_mask
     return Profiles(
         y_px, r_in, r_out, float(top), float(bottom), liquid_y, section.warnings

@@ -14,19 +14,19 @@ import pytest
 
 from pottery_volume import (
     AnalysisParams,
-    apply_profile_overrides,
     analyze_detailed,
+    apply_profile_overrides,
     binarize_image,
     compute_volumes,
     detect_axis,
     extract_profiles,
     extract_section,
     main,
+    profile_section_polygon,
     read_image,
     remove_small_components,
     resolve_scale,
     write_image,
-    profile_section_polygon,
 )
 from pottery_volume_gui import build_tsv_row, build_tsv_table, pixel_distance
 

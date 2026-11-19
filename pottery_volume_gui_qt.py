@@ -7,7 +7,6 @@ from importlib import import_module
 from types import ModuleType
 from typing import Any
 
-
 _QT_EXPORTS = {
     "QObject": "PySide6.QtCore",
     "QPointF": "PySide6.QtCore",
