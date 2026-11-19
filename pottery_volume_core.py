@@ -2,17 +2,49 @@
 
 from __future__ import annotations
 
-import argparse
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import NotRequired, TypedDict, cast
 
 import cv2
 import numpy as np
+from shapely.geometry import Polygon
+from shapely.validation import explain_validity
 from scipy.integrate import trapezoid
 from scipy.signal import savgol_filter
 from skimage.measure import label, regionprops
+
+
+class VolumeResult(TypedDict):
+    """Core numeric results emitted by the volume integration.
+
+    Note on volumetric units:
+        When a millimetre scale is provided (``mm_per_px is not None``),
+        both ``_cm3`` and ``_ml`` fields are emitted for reporting and TSV convenience.
+        Since 1 cm³ equals 1 mL, ``capacity_cm3`` and ``capacity_ml`` (and their
+        wall volume counterparts) are mathematically equivalent.
+    """
+
+    units: dict[str, str]
+    vessel_height: float
+    mouth_diameter: float
+    maximum_diameter: float
+    liquid_level_y_px: float
+    capacity: float
+    wall_volume: float
+    pappus_wall_volume: float
+    pappus_difference_percent: float
+    section_area: float
+    section_centroid_radius: float
+    mm_per_px: float | None
+    capacity_cm3: NotRequired[float]
+    capacity_ml: NotRequired[float]
+    wall_volume_cm3: NotRequired[float]
+    wall_volume_ml: NotRequired[float]
+    pappus_wall_volume_cm3: NotRequired[float]
+    pappus_wall_volume_ml: NotRequired[float]
+
 
 @dataclass
 class SectionResult:
@@ -38,19 +70,82 @@ class Profiles:
     warnings: list[str] = field(default_factory=list)
 
 
+def profile_section_polygon(
+    profiles: Profiles,
+    axis_x: float,
+) -> Polygon:
+    """Build and validate the right-side vessel wall polygon from radial profiles."""
+    if len(profiles.y_px) < 2:
+        raise ValueError("断面輪郭をPolygonにするには2行以上必要です。")
+    if not np.all(np.isfinite(profiles.r_in_px)) or not np.all(np.isfinite(profiles.r_out_px)):
+        raise ValueError("断面輪郭に無効な半径があります。")
+    if len(profiles.r_in_px) != len(profiles.y_px) or len(profiles.r_out_px) != len(profiles.y_px):
+        raise ValueError("断面輪郭の行数が一致しません。")
+
+    inner = [
+        (axis_x + float(radius), float(y))
+        for y, radius in zip(profiles.y_px, profiles.r_in_px)
+    ]
+    outer = [
+        (axis_x + float(radius), float(y))
+        for y, radius in zip(profiles.y_px, profiles.r_out_px)
+    ]
+    polygon = Polygon(inner + list(reversed(outer)))
+    if polygon.is_empty or polygon.area <= 0:
+        raise ValueError("断面Polygonの面積がありません。")
+    if not polygon.is_valid:
+        raise ValueError(f"断面Polygonが無効です: {explain_validity(polygon)}")
+    return polygon
+
+
+def apply_profile_overrides(
+    profiles: Profiles,
+    inner_radius_px: np.ndarray | None = None,
+    outer_radius_px: np.ndarray | None = None,
+    warnings: list[str] | None = None,
+) -> Profiles:
+    """Create a profiles copy with manually corrected inner/outer radii."""
+    r_in = profiles.r_in_px.copy()
+    r_out = profiles.r_out_px.copy()
+    if inner_radius_px is not None:
+        if inner_radius_px.shape != r_in.shape:
+            raise ValueError("修正した内面輪郭の行数が自動輪郭と一致しません。")
+        r_in = np.asarray(inner_radius_px, dtype=float).copy()
+    if outer_radius_px is not None:
+        if outer_radius_px.shape != r_out.shape:
+            raise ValueError("修正した外面輪郭の行数が自動輪郭と一致しません。")
+        r_out = np.asarray(outer_radius_px, dtype=float).copy()
+    if not np.all(np.isfinite(r_in)) or not np.all(np.isfinite(r_out)):
+        raise ValueError("輪郭の修正値に無効な数値があります。")
+    r_in = np.maximum(r_in, 0.0)
+    r_out = np.maximum(r_out, r_in + 0.25)
+    profile_warnings = list(profiles.warnings)
+    if warnings:
+        profile_warnings.extend(warnings)
+    return Profiles(
+        profiles.y_px.copy(),
+        r_in,
+        r_out,
+        profiles.top_y_px,
+        profiles.bottom_y_px,
+        profiles.liquid_y_px,
+        profile_warnings,
+    )
+
+
 def parse_crop(value: str) -> tuple[int, int, int, int]:
     """Parse an image crop in x0,y0,x1,y1 form."""
     try:
         vals = tuple(int(part.strip()) for part in value.split(","))
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
+        raise ValueError(
             "crop は x0,y0,x1,y1 の整数で指定してください"
         ) from exc
     if len(vals) != 4 or vals[2] <= vals[0] or vals[3] <= vals[1]:
-        raise argparse.ArgumentTypeError(
+        raise ValueError(
             "crop は x0,y0,x1,y1 の順で、幅と高さが正である必要があります"
         )
-    return vals  # type: ignore[return-value]
+    return cast(tuple[int, int, int, int], vals)
 
 
 def parse_points(value: str) -> tuple[float, float, float, float]:
@@ -58,12 +153,12 @@ def parse_points(value: str) -> tuple[float, float, float, float]:
     try:
         vals = tuple(float(part.strip()) for part in value.split(","))
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
+        raise ValueError(
             "点は x0,y0,x1,y1 の数値で指定してください"
         ) from exc
     if len(vals) != 4:
-        raise argparse.ArgumentTypeError("点は x0,y0,x1,y1 の4値で指定してください")
-    return vals  # type: ignore[return-value]
+        raise ValueError("点は x0,y0,x1,y1 の4値で指定してください")
+    return cast(tuple[float, float, float, float], vals)
 
 
 def binarize_image(gray: np.ndarray, adaptive: bool = False) -> tuple[np.ndarray, str]:
@@ -107,13 +202,11 @@ def write_image(path: Path, image: np.ndarray) -> None:
 
 def remove_small_components(binary: np.ndarray, min_area: int = 5) -> np.ndarray:
     """Remove tiny isolated marks while retaining thin vessel outlines."""
-    components = label(binary > 0, connectivity=2)
-    cleaned = np.zeros(binary.shape, dtype=np.uint8)
-    for region in regionprops(components):
-        if region.area >= min_area:
-            coords = region.coords
-            cleaned[coords[:, 0], coords[:, 1]] = 255
-    return cleaned
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    # Component 0 is the background; skip it.
+    keep = np.where(stats[1:, cv2.CC_STAT_AREA] >= min_area)[0] + 1
+    mask = np.isin(labels, keep)
+    return (mask * 255).astype(np.uint8)
 
 
 def detect_axis(
@@ -138,6 +231,8 @@ def detect_axis(
     best_score = -1.0
     best_run = 0
     expected_center = width / 2.0
+    _CENTER_PENALTY_WEIGHT = 0.35  # Penalise columns far from the image centre.
+    _CONTINUITY_WEIGHT = 0.08     # Reward dense columns with many foreground pixels.
     for local_x in range(center_band.shape[1]):
         col = center_band[:, local_x]
         indices = np.flatnonzero(col)
@@ -149,8 +244,8 @@ def detect_axis(
         run = int(np.max(ends - starts + 1))
         count = int(len(indices))
         x = x_lo + local_x
-        center_penalty = abs(x - expected_center) / max(1, width) * 0.35
-        score = run + count * 0.08 - center_penalty * height
+        center_penalty = abs(x - expected_center) / max(1, width) * _CENTER_PENALTY_WEIGHT
+        score = run + count * _CONTINUITY_WEIGHT - center_penalty * height
         if score > best_score:
             best_score, best_x, best_run = score, x, run
     if best_x is None:
@@ -262,7 +357,7 @@ def extract_section(
         line_source[:, :3] = (
             0  # remove the long axis stroke and antialiased edge pixels
         )
-        line_labels = label(line_source > 0, connectivity=2)
+        line_labels = np.asarray(label(line_source > 0, connectivity=2))
         line_props = regionprops(line_labels)
         min_span = max(8, int(roi.shape[0] * 0.20))
         long_labels = [
@@ -297,8 +392,11 @@ def _smooth(values: np.ndarray, window: int) -> np.ndarray:
     )
     if win < 5:
         return values
-    return savgol_filter(
-        values, window_length=win, polyorder=min(2, win - 1), mode="interp"
+    return np.asarray(
+        savgol_filter(
+            values, window_length=win, polyorder=min(2, win - 1), mode="interp"
+        ),
+        dtype=float,
     )
 
 
@@ -414,7 +512,7 @@ def compute_volumes(
     axis_x: float,
     mm_per_px: float | None = None,
     section_mode: str = "filled",
-) -> dict[str, Any]:
+) -> VolumeResult:
     """Integrate capacity and wall volume; cross-check wall volume using Pappus."""
     y = profiles.y_px
     rin = profiles.r_in_px
@@ -432,40 +530,11 @@ def compute_volumes(
         capacity_px3 = math.pi * float(trapezoid(rin_fill**2, y_fill))
     wall_px3 = math.pi * float(trapezoid(rout**2 - rin**2, y))
 
-    if np.any(section_mask):
-        region_labels = label(section_mask > 0, connectivity=2)
-        props = regionprops(region_labels)
-        largest = max(props, key=lambda item: item.area)
-        largest_mask = region_labels == largest.label
-        mask_rows = np.flatnonzero(np.any(largest_mask, axis=1))
-        area_px2 = 0.0
-        first_moment_px3 = 0.0
-        side_correction = 1.0 if section_mode == "filled" else 0.0
-        for row in mask_rows:
-            xs = np.flatnonzero(largest_mask[row])
-            row_area = float(len(xs)) + side_correction
-            row_centroid_x = (float(xs[0]) + float(xs[-1])) / 2.0
-            area_px2 += row_area
-            first_moment_px3 += row_area * (row_centroid_x - axis_x)
-        # The flood-filled interior omits the top and bottom contour strokes too.
-        # Add those end rows from the already interpolated profiles when needed.
-        for row in (int(round(profiles.top_y_px)), int(round(profiles.bottom_y_px))):
-            if (
-                row < 0
-                or row >= section_mask.shape[0]
-                or (len(mask_rows) and row in mask_rows)
-            ):
-                continue
-            radius_in = _profile_at(profiles.y_px, rin, float(row))
-            radius_out = _profile_at(profiles.y_px, rout, float(row))
-            row_area = max(0.0, radius_out - radius_in)
-            area_px2 += row_area
-            first_moment_px3 += row_area * (radius_in + radius_out) / 2.0
-        centroid_radius_px = first_moment_px3 / area_px2 if area_px2 else 0.0
-        centroid_x_px = axis_x + centroid_radius_px
-        pappus_px3 = 2.0 * math.pi * centroid_radius_px * area_px2
-    else:
-        area_px2 = centroid_x_px = centroid_radius_px = pappus_px3 = 0.0
+    section_polygon = profile_section_polygon(profiles, axis_x)
+    area_px2 = float(section_polygon.area)
+    centroid_x_px = float(section_polygon.centroid.x)
+    centroid_radius_px = centroid_x_px - axis_x
+    pappus_px3 = 2.0 * math.pi * centroid_radius_px * area_px2
     diff_pct = abs(pappus_px3 - wall_px3) / wall_px3 * 100 if wall_px3 else 0.0
     px_scale = mm_per_px if mm_per_px is not None else 1.0
     unit = "mm" if mm_per_px is not None else "px"
@@ -475,7 +544,7 @@ def compute_volumes(
     mouth_diameter = 2.0 * float(rin[0]) * length_scale
     max_diameter = 2.0 * float(np.max(rout)) * length_scale
     height = (profiles.bottom_y_px - profiles.top_y_px) * length_scale
-    result: dict[str, Any] = {
+    result: VolumeResult = {
         "units": {"length": unit, "volume": volume_unit},
         "vessel_height": height,
         "mouth_diameter": mouth_diameter,
@@ -490,14 +559,17 @@ def compute_volumes(
         "mm_per_px": mm_per_px,
     }
     if mm_per_px is not None:
+        volume_ml = capacity_px3 * volume_scale / 1000.0
+        wall_ml = wall_px3 * volume_scale / 1000.0
+        pappus_ml = pappus_px3 * volume_scale / 1000.0
         result.update(
             {
-                "capacity_cm3": capacity_px3 * volume_scale / 1000.0,
-                "capacity_ml": capacity_px3 * volume_scale / 1000.0,
-                "wall_volume_cm3": wall_px3 * volume_scale / 1000.0,
-                "wall_volume_ml": wall_px3 * volume_scale / 1000.0,
-                "pappus_wall_volume_cm3": pappus_px3 * volume_scale / 1000.0,
-                "pappus_wall_volume_ml": pappus_px3 * volume_scale / 1000.0,
+                "capacity_cm3": volume_ml,
+                "capacity_ml": volume_ml,
+                "wall_volume_cm3": wall_ml,
+                "wall_volume_ml": wall_ml,
+                "pappus_wall_volume_cm3": pappus_ml,
+                "pappus_wall_volume_ml": pappus_ml,
             }
         )
     return result

@@ -14,4 +14,4 @@ if __name__ == "__main__":
         # The packaged app is windowed, so keep CLI text output off the absent console.
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             raise SystemExit(main(arguments))
-    launch_gui(arguments[0] if arguments else None)
+    sys.exit(launch_gui(arguments[0] if arguments else None))

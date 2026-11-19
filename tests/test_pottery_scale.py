@@ -9,9 +9,13 @@ import numpy as np
 import pytest
 
 from pottery_scale import (
+    ScaleBarCandidate,
+    ScaleTextCandidate,
+    analyze_scale_candidates,
     classify_pottery_and_scale,
     detect_horizontal_scale_bars,
     extract_scale_from_image,
+    has_confident_scale_match,
     parse_metric_length,
     rank_scale_bars,
     recognize_scale_text,
@@ -66,6 +70,30 @@ def test_real_scale_image_reads_ten_centimetres_and_scale_bar():
     assert bars
     assert bars[0].pixels == pytest.approx(436, abs=4)
     assert scale_label.length_mm == 100
+
+    analyzed_labels, analyzed_bars = analyze_scale_candidates(image)
+    assert analyzed_bars[0].pixels == pytest.approx(436, abs=4)
+    assert has_confident_scale_match(analyzed_labels, analyzed_bars)
+
+
+def test_detect_horizontal_scale_bar_preserves_one_pixel_edge():
+    image = np.full((120, 240, 3), 255, dtype=np.uint8)
+    cv2.line(image, (20, 60), (220, 60), (0, 0, 0), 1)
+    cv2.line(image, (20, 55), (20, 65), (0, 0, 0), 1)
+    cv2.line(image, (220, 55), (220, 65), (0, 0, 0), 1)
+
+    bars = detect_horizontal_scale_bars(image)
+
+    assert bars
+    assert bars[0].pixels >= 196
+
+
+def test_confident_match_rejects_conflicting_labels():
+    label_10cm = ScaleTextCandidate("10cm", 10, "cm", 100, 0.99, (40, 50, 80, 70))
+    label_5cm = ScaleTextCandidate("5cm", 5, "cm", 50, 0.95, (40, 50, 80, 70))
+    bar = ScaleBarCandidate(20, 60, 120, 60, 0.95, 1)
+
+    assert not has_confident_scale_match([label_10cm, label_5cm], [bar])
 
 
 def test_classify_pottery_and_scale_with_fixture_images():

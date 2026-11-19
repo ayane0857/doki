@@ -42,6 +42,8 @@ fi
     --windowed \
     --exclude-module pytest \
     --collect-all rapidocr \
+    --collect-all PySide6 \
+    --collect-all shapely \
     --add-data "THIRD_PARTY_LICENSES.txt:." \
     --name PotteryVolume_ScaleOCR \
     --distpath dist \

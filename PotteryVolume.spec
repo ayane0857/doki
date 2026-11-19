@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [('THIRD_PARTY_LICENSES.txt', '.')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('rapidocr')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+for package in ('PySide6', 'shapely'):
+    tmp_ret = collect_all(package)
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
