@@ -260,8 +260,8 @@ def detect_axis(
 
 def _largest_component(mask: np.ndarray) -> tuple[np.ndarray, list[int]]:
     """Return the largest connected component and the other component sizes."""
-    labels = label(mask > 0, connectivity=2)
-    props = regionprops(labels)
+    labels = label(mask > 0, connectivity=2)  # type: ignore[no-untyped-call]
+    props = regionprops(labels)  # type: ignore[no-untyped-call]
     if not props:
         return np.zeros(mask.shape, dtype=np.uint8), []
     props.sort(key=lambda item: item.area, reverse=True)
