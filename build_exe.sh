@@ -35,20 +35,9 @@ else
 fi
 
 "$python_cmd" -m pip install "${pip_args[@]}" -r requirements-dev.txt
-"$python_cmd" -m PyInstaller \
-    --noconfirm \
-    --clean \
-    --onedir \
-    --windowed \
-    --exclude-module pytest \
-    --collect-all rapidocr \
-    --collect-all PySide6 \
-    --collect-all shapely \
-    --add-data "THIRD_PARTY_LICENSES.txt:." \
-    --name PotteryVolume_ScaleOCR \
-    --distpath dist \
-    --workpath build \
-    pottery_volume_gui.pyw
+"$python_cmd" -m PyInstaller --noconfirm --clean PotteryVolume.spec
+"$python_cmd" -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 
 echo
-echo "Built: $script_dir/dist/PotteryVolume_ScaleOCR/PotteryVolume_ScaleOCR"
+echo "Built: $script_dir/dist/PotteryVolume/PotteryVolume"
+echo "Built: $script_dir/dist/PotteryVolume_gui/PotteryVolume_gui"

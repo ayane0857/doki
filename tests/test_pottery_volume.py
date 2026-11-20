@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -211,6 +212,30 @@ def test_cli_import_does_not_load_qt():
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
+def test_cli_module_runs_directly():
+    """The packaged CLI entry point responds to --help without launching the GUI."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pottery_volume_cli", "--help"],
+        capture_output=True,
+        check=True,
+    )
+    assert b"usage:" in result.stdout.lower()
+
+
+def test_cli_module_handles_cp932_console_output():
+    image = Path(__file__).parent / "fixtures" / "pottery_image.png"
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "cp932:strict"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pottery_volume_cli", str(image), "--scale-mm-per-px", "0.13"],
+        capture_output=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_pixel_distance_returns_image_distance():
     """The GUI measurement helper reports the Euclidean pixel distance."""
     assert pixel_distance((10, 20), (13, 24)) == pytest.approx(5)
@@ -278,6 +303,22 @@ def test_low_resolution_270_by_170_image():
     assert result["capacity"] == pytest.approx(expected, rel=0.05)
     assert result["wall_volume"] == pytest.approx(expected_wall, rel=0.05)
     assert result["pappus_difference_percent"] < 5
+
+
+def test_pottery_fixture_bottom_profile_rejects_terminal_fragment():
+    """A broken bottom-edge fragment must not pull the final inner radius outward."""
+    image = read_image(Path(__file__).parent / "fixtures" / "pottery_image.png")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary, _ = binarize_image(gray)
+    binary = remove_small_components(binary, min_area=2)
+    axis, _ = detect_axis(binary)
+    section = extract_section(binary, axis)
+    profiles = extract_profiles(section, axis)
+
+    assert profiles.bottom_y_px == 436
+    assert profiles.r_in_px[-1] < 12
+    assert profiles.r_out_px[-1] > 60
+    assert any("器底付近" in warning for warning in profiles.warnings)
 
 
 @pytest.mark.parametrize(

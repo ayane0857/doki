@@ -85,7 +85,7 @@ HISTORY_HEADERS = (
 
 
 class HistoryTable(QTableWidget):
-    """Read-only grid that selects and copies like an Excel sheet."""
+    """Spreadsheet-like history grid with copy and cell-clearing support."""
 
     copied = Signal(str)
 
@@ -93,6 +93,7 @@ class HistoryTable(QTableWidget):
         self, records: list[dict[str, str]], parent: QWidget | None = None
     ) -> None:
         super().__init__(len(records), len(HISTORY_HEADERS), parent)
+        self._records = records
         self.setHorizontalHeaderLabels(list(HISTORY_HEADERS))
         for row, record in enumerate(records):
             for col, header in enumerate(HISTORY_HEADERS):
@@ -151,6 +152,14 @@ class HistoryTable(QTableWidget):
     def keyPressEvent(self, event: Any) -> None:
         if event.matches(QKeySequence.StandardKey.Copy):
             self.copy_selection()
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            for index in self.selectedIndexes():
+                item = self.item(index.row(), index.column())
+                if item is not None:
+                    item.setText("")
+                self._records[index.row()][HISTORY_HEADERS[index.column()]] = ""
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1070,6 +1079,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         hint = QLabel(
             "セルをドラッグ・Shift/Ctrl+クリックで選択し、Ctrl+C でコピーできます。"
+            "Delete/Backspace で選択セルの内容を消去できます。"
             "列見出し・行番号のクリックで列・行ごと選択、右クリックで見出し付きコピー。"
         )
         hint.setObjectName("caption")

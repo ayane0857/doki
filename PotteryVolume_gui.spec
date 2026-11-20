@@ -1,7 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('THIRD_PARTY_LICENSES.txt', '.')]
+datas = [
+    ('THIRD_PARTY_LICENSES.txt', '.'),
+    ('docs/gui/README.txt', '.'),
+]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('rapidocr')
@@ -32,7 +35,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='PotteryVolume_ScaleOCR',
+    name='PotteryVolume_gui',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -51,5 +54,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='PotteryVolume_ScaleOCR',
+    name='PotteryVolume_gui',
 )

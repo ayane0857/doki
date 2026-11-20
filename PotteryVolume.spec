@@ -1,18 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('THIRD_PARTY_LICENSES.txt', '.')]
+datas = [
+    ('THIRD_PARTY_LICENSES.txt', '.'),
+    ('docs/cli/README.txt', '.'),
+]
 binaries = []
 hiddenimports = []
-tmp_ret = collect_all('rapidocr')
+tmp_ret = collect_all('shapely')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-for package in ('PySide6', 'shapely'):
-    tmp_ret = collect_all(package)
-    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['pottery_volume_gui.pyw'],
+    ['pottery_volume_cli.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -36,7 +36,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

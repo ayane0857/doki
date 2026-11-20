@@ -65,13 +65,16 @@ python -m pip install -r requirements-dev.txt
 
 ## Windows EXE の作成
 
-Windows では `build_exe.bat` を実行するとアプリフォルダーが作成されます。配布する際は EXE と `_internal` フォルダーを一緒に配置してください。
+Windows では `build_exe.bat` を実行するとCLI版とGUI版のアプリフォルダーが作成されます。配布する際は各EXEと `_internal` フォルダーを一緒に配置してください。
 
 ~~~text
-dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe
+dist\PotteryVolume\PotteryVolume.exe
+dist\PotteryVolume_gui\PotteryVolume_gui.exe
 ~~~
 
-アプリフォルダーにはランタイムライブラリと OCR モデルが含まれるため、実行先 PC に Python をインストールする必要はありません。
+各配布フォルダーには版ごとの使い方を記した `README.txt` が入ります。ビルド担当者向けの手順は [README_BUILD.md](./README_BUILD.md) を参照してください。
+
+CLI版はコンソールアプリ、GUI版はウィンドウアプリです。GUI版にはランタイムライブラリと OCR モデルが含まれるため、実行先 PC に Python をインストールする必要はありません。
 
 Linux/macOS では `build_exe.sh` を実行すると、同じ設定でアプリフォルダーを作成できます。
 スクリプトは共有ライブラリ付きPythonからビルド用のvenvを作成して使用します。
@@ -84,15 +87,16 @@ bash build_exe.sh
 ~~~
 
 ~~~text
-dist/PotteryVolume_ScaleOCR/PotteryVolume_ScaleOCR
+dist/PotteryVolume/PotteryVolume
+dist/PotteryVolume_gui/PotteryVolume_gui
 ~~~
 
-GitHub Actions ではコミットごとにWindows版をビルドし、ZIPをArtifactとして保存します。GitHubのActionsから対象の実行結果を開き、Artifactsの `PotteryVolume_ScaleOCR-<commit-sha>` をダウンロードしてください。
+GitHub Actions ではコミットごとにWindows版をビルドし、両アプリをZIP形式のArtifactとして保存します。GitHubのActionsから対象の実行結果を開き、Artifactsの `PotteryVolume-Windows-<commit-sha>` をダウンロードしてください。
 
-CMD からGUIを開かずに実行する場合は --batch を付けます。JSON が必要な場合だけ --json-out を指定してください。
+CLI版はGUIを開かずに画像を処理します。JSON が必要な場合だけ --json-out を指定してください。
 
 ~~~text
-dist\PotteryVolume_ScaleOCR\PotteryVolume_ScaleOCR.exe --batch input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
+dist\PotteryVolume\PotteryVolume.exe input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
 ~~~
 
 ## 実行
@@ -181,11 +185,11 @@ ruff check .
 pyright
 ~~~
 
-2つの `.spec` はどちらもプロジェクトのルートで実行します。`PotteryVolume.spec` は `dist/PotteryVolume/`、`PotteryVolume_ScaleOCR.spec` は `dist/PotteryVolume_ScaleOCR/` に、ウィンドウ形式のonedirアプリを作ります。両方ともRapidOCRのデータ・バイナリ・hidden importを収集し、`THIRD_PARTY_LICENSES.txt` を同梱します。
+2つの `.spec` はどちらもプロジェクトのルートで実行します。`PotteryVolume.spec` はコンソール形式のCLI版 `dist/PotteryVolume/PotteryVolume.exe`、`PotteryVolume_gui.spec` はウィンドウ形式のGUI版 `dist/PotteryVolume_gui/PotteryVolume_gui.exe` を作ります。GUI版はRapidOCRとPySide6のデータ・バイナリ・hidden importを収集します。両方に `THIRD_PARTY_LICENSES.txt` を同梱します。
 
 ~~~powershell
 python -m PyInstaller --noconfirm PotteryVolume.spec
-python -m PyInstaller --noconfirm PotteryVolume_ScaleOCR.spec
+python -m PyInstaller --noconfirm PotteryVolume_gui.spec
 ~~~
 
-`build_exe.bat` と `build_exe.sh` は従来どおり `PotteryVolume_ScaleOCR` を作ります。通常版も作る場合は上記の `PotteryVolume.spec` を実行してください。
+`build_exe.bat` と `build_exe.sh` はCLI版とGUI版の両方を作ります。
