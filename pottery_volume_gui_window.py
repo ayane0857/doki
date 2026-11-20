@@ -388,7 +388,10 @@ class MainWindow(QMainWindow):
     def _build_view_menu(self) -> None:
         menu = self.menuBar().addMenu("表示")
         theme_group = QActionGroup(self)
-        current_theme = QApplication.instance().property("pottery_theme_mode") or "system"
+        app = QApplication.instance()
+        current_theme = (
+            app.property("pottery_theme_mode") if isinstance(app, QApplication) else None
+        ) or "system"
         self.theme_actions: dict[str, QAction] = {}
         for theme, label in (
             ("system", "自動（システム設定）"),
@@ -410,7 +413,7 @@ class MainWindow(QMainWindow):
         from pottery_volume_gui_style import stylesheet_for_theme
 
         app = QApplication.instance()
-        if app is None:
+        if not isinstance(app, QApplication):
             return
         app.setProperty("pottery_theme_mode", theme)
         app.setStyleSheet(stylesheet_for_theme(theme, app))
