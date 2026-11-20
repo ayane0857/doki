@@ -1,17 +1,12 @@
+import os
+from collections.abc import Iterator
+
 import pytest
+from PySide6.QtWidgets import QApplication
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _qt_session_cleanup() -> object:
-    yield
-
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:
-        return
-
-    app = QApplication.instance()
-    if app is not None:
-        app.closeAllWindows()
-        app.processEvents()
-        app.quit()
+@pytest.fixture(scope="session")
+def qt_app() -> Iterator[QApplication]:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    yield app
