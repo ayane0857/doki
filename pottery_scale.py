@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 import re
 import threading
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -58,7 +59,9 @@ def parse_metric_length(text: str) -> tuple[float, str, float] | None:
     if not match:
         return None
 
-    number_text = match.group(1).translate(str.maketrans({"o": "0", "i": "1", "l": "1", "|": "1"}))
+    number_text = match.group(1)
+    for source, replacement in (("o", "0"), ("i", "1"), ("l", "1"), ("|", "1")):
+        number_text = number_text.replace(source, replacement)
     number_text = number_text.replace(",", ".")
     try:
         value = float(number_text)
@@ -72,7 +75,7 @@ def parse_metric_length(text: str) -> tuple[float, str, float] | None:
 
 
 @lru_cache(maxsize=1)
-def _ocr_engine():
+def _ocr_engine() -> Any:
     """Create RapidOCR only when a user opens the calibration tool."""
     try:
         from rapidocr import RapidOCR
@@ -245,7 +248,11 @@ def detect_horizontal_scale_bars(
         y_center = (candidate.y1 + candidate.y2) / 2
         tick_tolerance = max(8.0, min(width * 0.05, candidate.pixels * 0.08))
 
-        def snap_endpoint(x: float) -> tuple[float, bool]:
+        def snap_endpoint(
+            x: float,
+            y_center: float = y_center,
+            tick_tolerance: float = tick_tolerance,
+        ) -> tuple[float, bool]:
             possible: list[tuple[float, float]] = []
             for tick_x, tick_y0, tick_y1 in vertical_ticks:
                 x_distance = abs(tick_x - x)
@@ -263,7 +270,11 @@ def detect_horizontal_scale_bars(
         if sx2 < sx1:
             sx1, sx2 = sx2, sx1
 
-        def refine_rail_endpoint(x: float, is_start: bool) -> float:
+        def refine_rail_endpoint(
+            x: float,
+            is_start: bool,
+            candidate: ScaleBarCandidate = candidate,
+        ) -> float:
             """Tighten an unticked endpoint to the local dark-pixel transition."""
             margin = max(5, min(18, int(candidate.pixels * 0.025)))
             left = max(0, int(math.floor(x)) - margin)
@@ -277,7 +288,7 @@ def detect_horizontal_scale_bars(
                 [candidate.y1, candidate.y2],
             )
             support = np.zeros(len(xs), dtype=float)
-            for index, (px, py) in enumerate(zip(xs, line_y)):
+            for index, (px, py) in enumerate(zip(xs, line_y, strict=False)):
                 iy = int(round(py))
                 y0, y1 = max(0, iy - 2), min(height, iy + 3)
                 if y1 > y0:
@@ -322,7 +333,7 @@ def detect_horizontal_scale_bars(
         sample_x = np.linspace(sx1, sx2, num=min(160, max(24, int(sx2 - sx1))))
         sample_y = np.linspace(candidate.y1, candidate.y2, num=len(sample_x))
         support = []
-        for px, py in zip(sample_x, sample_y):
+        for px, py in zip(sample_x, sample_y, strict=False):
             ix, iy = int(round(px)), int(round(py))
             y0, y1 = max(0, iy - 2), min(height, iy + 3)
             x0, x1 = max(0, ix - 1), min(width, ix + 2)
@@ -523,7 +534,9 @@ def classify_pottery_and_scale_with_candidates(
     p_a = Path(path_a)
     p_b = Path(path_b)
 
-    def compute_scale_score(path: Path):
+    def compute_scale_score(
+        path: Path,
+    ) -> tuple[float, tuple[int, int] | None, list[ScaleTextCandidate], list[ScaleBarCandidate]]:
         try:
             image = read_image(path)
         except Exception:

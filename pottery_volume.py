@@ -8,6 +8,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pottery_volume_cli import (
+    AnalysisOutput,
+    AnalysisParams,
+    AnalysisResult,
+    _print_result,  # noqa: F401  # Legacy direct import; excluded from __all__.
+    analyze,
+    analyze_detailed,
+    build_parser,
+    main,
+    params_from_namespace,
+    resolve_scale,
+)
 from pottery_volume_core import (
     Profiles,
     SectionResult,
@@ -25,18 +37,6 @@ from pottery_volume_core import (
     remove_small_components,
     visualize,
     write_image,
-)
-from pottery_volume_cli import (
-    AnalysisResult,
-    AnalysisOutput,
-    AnalysisParams,
-    _print_result,  # noqa: F401  # Legacy direct import; excluded from __all__.
-    analyze,
-    analyze_detailed,
-    build_parser,
-    main,
-    params_from_namespace,
-    resolve_scale,
 )
 
 

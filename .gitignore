@@ -54,6 +54,8 @@ cover/
 
 # Local test screenshots and generated results
 tests/fixtures/debug_out/
+tests/debug_out/
+tests/**/debug_screenshot/
 
 # Translations
 *.mo

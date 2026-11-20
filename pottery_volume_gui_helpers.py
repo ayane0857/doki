@@ -189,7 +189,7 @@ def _format_value(value: Any, decimals: int | None) -> str:
         return value if decimals is None else _format_numeric_value(value, decimals)
     try:
         numeric_value = float(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return str(value)
     if not math.isfinite(numeric_value):
         return ""

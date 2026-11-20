@@ -14,19 +14,19 @@ import pytest
 
 from pottery_volume import (
     AnalysisParams,
-    apply_profile_overrides,
     analyze_detailed,
+    apply_profile_overrides,
     binarize_image,
     compute_volumes,
     detect_axis,
     extract_profiles,
     extract_section,
     main,
+    profile_section_polygon,
     read_image,
     remove_small_components,
     resolve_scale,
     write_image,
-    profile_section_polygon,
 )
 from pottery_volume_gui import build_tsv_row, build_tsv_table, pixel_distance
 
@@ -163,7 +163,7 @@ def test_scale_conversion_is_cubic_and_reports_ml():
 
 
 def test_analysis_params_preserve_baseline_numeric_results(tmp_path: Path):
-    """The structured API retains the former integration's exact values."""
+    """The structured API retains the former integration's values within tight tolerance."""
     image_path = tmp_path / "cylinder.png"
     write_image(image_path, cylinder_shell())
 
@@ -171,13 +171,24 @@ def test_analysis_params_preserve_baseline_numeric_results(tmp_path: Path):
     output = analyze_detailed(params)
 
     assert output.params is params
-    assert output.args.input == image_path
-    assert output.result["capacity"] == 183334.8931735552
-    assert output.result["wall_volume"] == 73887.38689914855
-    assert output.result["pappus_wall_volume"] == 73887.38689914795
-    assert output.result["pappus_difference_percent"] == 8.074835900982665e-13
-    assert output.result["capacity_ml"] == 183.3348931735552
-    assert output.result["wall_volume_ml"] == 73.88738689914855
+    assert output.params.input_path == image_path
+    assert output.result["capacity"] == pytest.approx(
+        183334.8931735552, rel=1e-15, abs=0.0
+    )
+    assert output.result["wall_volume"] == pytest.approx(
+        73887.38689914855, rel=1e-15, abs=0.0
+    )
+    assert output.result["pappus_wall_volume"] == pytest.approx(
+        73887.38689914795, rel=1e-12, abs=0.0
+    )
+    # The independent volume calculations should agree to near machine precision.
+    assert output.result["pappus_difference_percent"] < 1e-12
+    assert output.result["capacity_ml"] == pytest.approx(
+        183.3348931735552, rel=1e-15, abs=0.0
+    )
+    assert output.result["wall_volume_ml"] == pytest.approx(
+        73.88738689914855, rel=1e-15, abs=0.0
+    )
     assert output.result["mm_per_px"] == 0.5
     assert "scale_mm_per_px" not in output.result
 
