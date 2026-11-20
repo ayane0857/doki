@@ -186,7 +186,7 @@ def _find_rails(
     height, width = mask.shape[:2]
     gap = max(4, int(round(width * 0.01)))
     closed = cv2.morphologyEx(
-        mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (gap, 3))
+        mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (gap, 1))
     )
     # A 1-row opening removes ticks, text and vertical clutter, and leaves
     # rails; outlined/checkered bars stay as one connected ladder shape.
