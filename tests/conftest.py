@@ -1,5 +1,3 @@
-import gc
-
 import pytest
 
 
@@ -15,7 +13,5 @@ def _qt_session_cleanup() -> object:
     app = QApplication.instance()
     if app is not None:
         app.closeAllWindows()
-        app.processEvents()
-        gc.collect()
         app.processEvents()
         app.quit()
