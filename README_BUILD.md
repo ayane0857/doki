@@ -49,4 +49,4 @@ python -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 
 ## GitHub Actions
 
-`build-exe` ワークフローは両方の配布フォルダーを `PotteryVolume-Windows-<commit-sha>` というArtifact名でアップロードします。
+`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。ビルド成功時は、両方の配布フォルダーを `PotteryVolume-Windows-<commit-sha>` というArtifact名でアップロードします。

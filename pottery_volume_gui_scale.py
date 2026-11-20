@@ -310,15 +310,22 @@ class ScaleCalibrationDialog(QDialog):
         bars: list[ScaleBarCandidate],
         default_length_mm: float | None,
         parent: Any,
+        *,
+        selected_label: ScaleTextCandidate | None = None,
+        selected_bar: ScaleBarCandidate | None = None,
+        selected_points: tuple[tuple[float, float], tuple[float, float]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"目盛り線を確認・修正 - {path.name}")
         self.resize(1180, 760)
         self.mm_per_px: float | None = None
         self.line_pixels: float | None = None
+        self.length_mm: float | None = None
+        self.line_points: tuple[tuple[float, float], tuple[float, float]] | None = None
         self.image = read_image(path)
         self.all_labels = labels
         self.all_bars = bars
+        self.default_length_mm = default_length_mm
 
         outer = QVBoxLayout(self)
         outer.addWidget(QLabel(
@@ -331,19 +338,62 @@ class ScaleCalibrationDialog(QDialog):
         panel.setMinimumWidth(290)
         form = QFormLayout(panel)
         self.label_combo = QComboBox()
+        matching_index = None
+        if selected_label is not None:
+            selected_label_index = next(
+                (
+                    index
+                    for index, item in enumerate(labels)
+                    if item is selected_label or item == selected_label
+                ),
+                None,
+            )
+            if selected_label_index is not None and (
+                default_length_mm is None
+                or math.isclose(
+                    labels[selected_label_index].length_mm,
+                    default_length_mm,
+                    rel_tol=1e-9,
+                    abs_tol=1e-9,
+                )
+            ):
+                matching_index = selected_label_index
+        if matching_index is None and default_length_mm is not None:
+            matching_index = next(
+                (
+                    index
+                    for index, item in enumerate(labels)
+                    if math.isclose(
+                        item.length_mm,
+                        default_length_mm,
+                        rel_tol=1e-9,
+                        abs_tol=1e-9,
+                    )
+                ),
+                None,
+            )
+        keep_current_length = default_length_mm is not None and matching_index is None
+        if keep_current_length:
+            self.label_combo.addItem(
+                f"現在の長さを維持（{default_length_mm:g} mm）", None
+            )
         if labels:
             for item in labels:
                 self.label_combo.addItem(
                     f"{item.text}  ·  {item.length_mm:g} mm  ·  OCR {item.confidence:.0%}",
                     item,
                 )
-        else:
+        elif not keep_current_length:
             self.label_combo.addItem("OCRなし（長さを入力）", None)
+        if matching_index is not None:
+            self.label_combo.setCurrentIndex(
+                matching_index + int(keep_current_length)
+            )
         form.addRow("読み取った長さ", self.label_combo)
 
         self.length_spin = QDoubleSpinBox()
         self.length_spin.setRange(0, 1_000_000_000)
-        self.length_spin.setDecimals(4)
+        self.length_spin.setDecimals(12)
         self.length_spin.setValue(max(0.0, default_length_mm or 0.0))
         self.unit_combo = QComboBox()
         self.unit_combo.addItems(["mm", "cm", "m"])
@@ -386,13 +436,26 @@ class ScaleCalibrationDialog(QDialog):
         self.unit_combo.currentTextChanged.connect(self._update_readout)
         self.canvas.on_changed = self._update_readout
         self.canvas.on_candidate_clicked = self._select_candidate
-        self._label_changed()
+        self._label_changed(
+            update_length=default_length_mm is None,
+            preferred_bar=selected_bar,
+            preferred_points=selected_points,
+        )
 
-    def _label_changed(self, *_args: Any) -> None:
+    def _label_changed(
+        self,
+        *_args: Any,
+        update_length: bool = True,
+        preferred_bar: ScaleBarCandidate | None = None,
+        preferred_points: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    ) -> None:
         label = self.label_combo.currentData()
-        if label is not None:
+        if label is not None and update_length:
             self.length_spin.setValue(label.value)
             self.unit_combo.setCurrentText(label.unit)
+        elif label is None and update_length and self.default_length_mm is not None:
+            self.length_spin.setValue(max(0.0, self.default_length_mm))
+            self.unit_combo.setCurrentText("mm")
         selected = label if label is not None else (self.all_labels[0] if self.all_labels else None)
         self.bars = rank_scale_bars(self.all_bars, selected, self.image.shape)
         self.bar_combo.blockSignals(True)
@@ -402,11 +465,23 @@ class ScaleCalibrationDialog(QDialog):
                 self.bar_combo.addItem(
                     f"{index + 1}: {bar.pixels:.1f} px  ·  y={(bar.y1 + bar.y2) / 2:.0f}  ·  信頼度 {bar.confidence:.0%}"
                 )
-            self.bar_combo.setCurrentIndex(0)
+            selected_bar_index = next(
+                (
+                    index
+                    for index, bar in enumerate(self.bars)
+                    if preferred_bar is not None
+                    and (bar is preferred_bar or bar == preferred_bar)
+                ),
+                0,
+            )
+            self.bar_combo.setCurrentIndex(selected_bar_index)
         else:
             self.bar_combo.addItem("候補なし（画像をクリックして指定）")
+            selected_bar_index = -1
         self.bar_combo.blockSignals(False)
-        self.canvas.set_candidates(self.all_labels, self.bars, 0 if self.bars else -1)
+        self.canvas.set_candidates(self.all_labels, self.bars, selected_bar_index)
+        if preferred_points is not None:
+            self.canvas.manual_points = list(preferred_points)
         self._update_readout()
 
     def _bar_changed(self, index: int) -> None:
@@ -457,5 +532,7 @@ class ScaleCalibrationDialog(QDialog):
             QMessageBox.warning(self, "実寸を入力してください", "目盛り線の実寸は0より大きい値にしてください。")
             return
         self.line_pixels = pixels
+        self.length_mm = length_mm
+        self.line_points = (points[0], points[1])
         self.mm_per_px = length_mm / pixels
         super().accept()

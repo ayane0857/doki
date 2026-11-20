@@ -43,35 +43,41 @@ class ScaleBarCandidate:
         return math.hypot(self.x2 - self.x1, self.y2 - self.y1)
 
 
+# A number directly followed by a unit. Whitespace is only allowed between the
+# number and its unit, so "0 5 10cm" reads as 10 cm (not 510 cm).
 _SCALE_TEXT = re.compile(
-    r"(?<![\d.])([0-9oil|]+(?:[.,][0-9oil|]+)?)(mm|cm|m)(?![a-z])",
+    r"(?<![\d.,])([+-]?\s*[0-9oil|]+(?:[.,][0-9oil|]+)?)\s*(mm|cm|m)(?![a-z])",
     re.IGNORECASE,
 )
 _UNIT_TO_MM = {"mm": 1.0, "cm": 10.0, "m": 1000.0}
+_MIN_CONFIDENT_BAR_CONFIDENCE = 0.80
 
 
 def parse_metric_length(text: str) -> tuple[float, str, float] | None:
-    """Parse a length such as ``10cm`` and return value, unit, and millimetres."""
-    normalized = unicodedata.normalize("NFKC", text).lower()
-    normalized = normalized.replace("μ", "u").replace("µ", "u")
-    normalized = re.sub(r"\s+", "", normalized)
-    match = _SCALE_TEXT.search(normalized)
-    if not match:
-        return None
+    """Parse a length such as ``10cm`` and return value, unit, and millimetres.
 
-    number_text = match.group(1)
-    for source, replacement in (("o", "0"), ("i", "1"), ("l", "1"), ("|", "1")):
-        number_text = number_text.replace(source, replacement)
-    number_text = number_text.replace(",", ".")
-    try:
-        value = float(number_text)
-    except ValueError:
-        return None
-    unit = match.group(2).lower()
-    length_mm = value * _UNIT_TO_MM[unit]
-    if not math.isfinite(length_mm) or value <= 0:
-        return None
-    return value, unit, length_mm
+    When several lengths appear (``0 5 10cm``), the last one is used because a
+    scale bar's full length is printed at its far end.
+    """
+    normalized = unicodedata.normalize("NFKC", text).replace("\u2212", "-").lower()
+    normalized = normalized.replace("μ", "u").replace("µ", "u")
+    best: tuple[float, str, float] | None = None
+    for match in _SCALE_TEXT.finditer(normalized):
+        number_text = "".join(match.group(1).split())
+        if not any(char.isdigit() for char in number_text):
+            continue  # "aim", "il m": OCR look-alike letters only
+        for source, replacement in (("o", "0"), ("i", "1"), ("l", "1"), ("|", "1")):
+            number_text = number_text.replace(source, replacement)
+        number_text = number_text.replace(",", ".")
+        try:
+            value = float(number_text)
+        except ValueError:
+            continue
+        unit = match.group(2).lower()
+        length_mm = value * _UNIT_TO_MM[unit]
+        if math.isfinite(length_mm) and value > 0:
+            best = (value, unit, length_mm)
+    return best
 
 
 @lru_cache(maxsize=1)
@@ -111,13 +117,309 @@ def recognize_scale_text(image: np.ndarray) -> list[ScaleTextCandidate]:
             bounds = (x0, y0, x1, y1)
         else:
             bounds = (0.0, 0.0, 0.0, 0.0)
-        confidence = float(scores[index]) if scores is not None and index < len(scores) else 0.0
+        confidence = (
+            float(scores[index]) if scores is not None and index < len(scores) else 0.0
+        )
         candidates.append(
-            ScaleTextCandidate(
-                str(text), value, unit, length_mm, confidence, bounds
-            )
+            ScaleTextCandidate(str(text), value, unit, length_mm, confidence, bounds)
         )
     return sorted(candidates, key=lambda item: item.confidence, reverse=True)
+
+
+def _dark_mask(gray: np.ndarray) -> np.ndarray:
+    """Return a 0/255 mask of ink-like pixels, robust to uneven lighting."""
+    height, width = gray.shape[:2]
+    work = gray
+    if float(np.median(work)) < 110:  # light rails on a dark background
+        work = 255 - work
+    blurred = cv2.GaussianBlur(work, (3, 3), 0)
+    short_side = min(height, width)
+    block = max(15, (short_side // 6) | 1)
+    if block >= short_side:
+        block = max(3, (short_side - 1) | 1)
+    adaptive = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, block, 8
+    )
+    # Reject paper texture: real ink is clearly darker than the paper level.
+    paper = float(np.percentile(blurred, 90))
+    ink = blurred < paper - 35
+    return ((adaptive > 0) & ink).astype(np.uint8) * 255
+
+
+def _estimate_skew(
+    mask: np.ndarray, max_angle: float = 3.0, step: float = 0.2
+) -> float:
+    """Find the small rotation (degrees) that makes horizontal strokes row-aligned."""
+    height, width = mask.shape[:2]
+    factor = min(1.0, 800.0 / width)
+    if factor < 1 and round(height * factor) == 0:
+        return 0.0
+    small = (
+        cv2.resize(mask, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
+        if factor < 1
+        else mask
+    )
+    small_h, small_w = small.shape[:2]
+    center = (small_w / 2.0, small_h / 2.0)
+    best_angle, best_score, zero_score = 0.0, -1.0, 0.0
+    for angle in np.arange(-max_angle, max_angle + 1e-9, step):
+        matrix = cv2.getRotationMatrix2D(center, float(angle), 1.0)
+        rotated = cv2.warpAffine(
+            small, matrix, (small_w, small_h), flags=cv2.INTER_LINEAR
+        )
+        rows = (rotated > 100).sum(axis=1).astype(float)
+        score = float(np.sum(rows * rows))
+        if abs(angle) < 1e-9:
+            zero_score = score
+        if score > best_score:
+            best_angle, best_score = float(angle), score
+    # Only deskew when it clearly sharpens the row profile.
+    if best_score < zero_score * 1.03:
+        return 0.0
+    return best_angle
+
+
+def _find_rails(
+    mask: np.ndarray, min_length: int
+) -> list[tuple[float, float, float, float, float]]:
+    """Return (x1, x2, y, thickness, continuity) for long horizontal strokes/bars."""
+    height, width = mask.shape[:2]
+    gap = max(4, int(round(width * 0.01)))
+    closed = cv2.morphologyEx(
+        mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (gap, 1))
+    )
+    # A 1-row opening removes ticks, text and vertical clutter, and leaves
+    # rails; outlined/checkered bars stay as one connected ladder shape.
+    opened = cv2.morphologyEx(
+        closed,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (min_length, 1)),
+    )
+    count, _, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    near_rows = cv2.dilate(mask, np.ones((3, 1), np.uint8))
+    found: list[tuple[float, float, float, float, float]] = []
+    for index in range(1, count):
+        x, y, comp_w, comp_h, _area = (int(v) for v in stats[index])
+        if comp_w < min_length:
+            continue
+        if comp_h > max(12, height * 0.2) or comp_w < 8 * comp_h:
+            continue
+        band = near_rows[y : y + comp_h, x : x + comp_w] > 0
+        row_cover = band.sum(axis=1) / float(comp_w)
+        continuity = float(row_cover.max()) if len(row_cover) else 0.0
+        found.append(
+            (
+                float(x),
+                float(x + comp_w - 1),
+                y + (comp_h - 1) / 2.0,
+                float(comp_h),
+                continuity,
+            )
+        )
+    # After stacking, a real bar is still long and thin; a short, thick block
+    # is typically a word's x-height band or a logo.
+    return [
+        rail for rail in _stack_rails(found, mask) if (rail[1] - rail[0]) >= 8 * rail[3]
+    ]
+
+
+def _has_vertical_connector(
+    mask: np.ndarray,
+    upper: tuple[float, float, float, float, float],
+    lower: tuple[float, float, float, float, float],
+) -> bool:
+    if upper[2] > lower[2]:
+        upper, lower = lower, upper
+
+    height, width = mask.shape[:2]
+    row_start = max(0, int(math.floor(upper[2] - upper[3] / 2.0)))
+    row_end = min(height, int(math.ceil(lower[2] + lower[3] / 2.0)) + 1)
+    col_start = max(0, int(math.ceil(max(upper[0], lower[0]) - 2)))
+    col_end = min(width, int(math.floor(min(upper[1], lower[1]) + 2)) + 1)
+    if row_end <= row_start or col_end <= col_start:
+        return False
+
+    region = (mask[row_start:row_end, col_start:col_end] > 0).astype(np.uint8)
+    component_count, component_ids = cv2.connectedComponents(region, connectivity=8)
+    if component_count <= 1:
+        return False
+
+    upper_start = max(0, int(math.floor(upper[2] - upper[3] / 2.0)) - row_start)
+    upper_end = min(
+        region.shape[0], int(math.ceil(upper[2] + upper[3] / 2.0)) + 1 - row_start
+    )
+    lower_start = max(0, int(math.floor(lower[2] - lower[3] / 2.0)) - row_start)
+    lower_end = min(
+        region.shape[0], int(math.ceil(lower[2] + lower[3] / 2.0)) + 1 - row_start
+    )
+    upper_ids = np.unique(component_ids[upper_start:upper_end])
+    lower_ids = np.unique(component_ids[lower_start:lower_end])
+    connected_ids = np.intersect1d(upper_ids[upper_ids > 0], lower_ids[lower_ids > 0])
+    return bool(connected_ids.size)
+
+
+def _stack_rails(
+    rails: list[tuple[float, float, float, float, float]],
+    mask: np.ndarray,
+) -> list[tuple[float, float, float, float, float]]:
+    """Join vertically adjacent rails with the same extent into one bar.
+
+    Separated rails are joined only when a side or interior stroke connects them.
+    """
+    pending = sorted(rails, key=lambda r: r[2])
+    merged: list[tuple[float, float, float, float, float]] = []
+    for rail in pending:
+        x1, x2, y, thick, cont = rail
+        for index, (mx1, mx2, my, mthick, mcont) in enumerate(merged):
+            overlap = max(0.0, min(x2, mx2) - max(x1, mx1))
+            shorter = min(x2 - x1, mx2 - mx1)
+            top = min(y - thick / 2.0, my - mthick / 2.0)
+            bottom = max(y + thick / 2.0, my + mthick / 2.0)
+            gap = (bottom - top) - (thick + mthick)
+            if (
+                shorter > 0
+                and overlap / shorter >= 0.9
+                and gap <= max(30.0, 0.05 * shorter)
+                and (
+                    gap <= 0
+                    or _has_vertical_connector(
+                        mask,
+                        (mx1, mx2, my, mthick, mcont),
+                        rail,
+                    )
+                )
+            ):
+                merged[index] = (
+                    min(x1, mx1),
+                    max(x2, mx2),
+                    (top + bottom) / 2.0,
+                    bottom - top,
+                    max(cont, mcont),
+                )
+                break
+        else:
+            merged.append(rail)
+    return merged
+
+
+def _find_ticks(mask: np.ndarray) -> list[tuple[float, float, float]]:
+    """Return (x_center, y_top, y_bottom) of short vertical strokes."""
+    height, width = mask.shape[:2]
+    kernel_h = max(8, min(80, height // 30))
+    vertical = cv2.morphologyEx(
+        mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_h))
+    )
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(
+        vertical, connectivity=8
+    )
+    ticks: list[tuple[float, float, float]] = []
+    for index in range(1, count):
+        x, y, tick_w, tick_h, _area = (int(v) for v in stats[index])
+        if tick_h >= max(6, height * 0.025) and tick_w <= max(8, width * 0.02):
+            ticks.append((float(centroids[index][0]), float(y), float(y + tick_h - 1)))
+    return ticks
+
+
+def _band_clutter(
+    mask: np.ndarray, x1: float, x2: float, y: float, thickness: float
+) -> float:
+    """Fraction of columns with ink just above/below a rail.
+
+    Real scale rails have clean surroundings (only a few ticks), whereas a
+    baseline of text has ink over a large share of its width.
+    """
+    height = mask.shape[0]
+    left, right = max(0, int(round(x1))), min(mask.shape[1], int(round(x2)) + 1)
+    if right <= left:
+        return 0.0
+    band = int(np.clip(0.12 * (x2 - x1), 8, 30))
+    half = thickness / 2.0
+    worst = 0.0
+    for lo, hi in (
+        (y - half - 2 - band, y - half - 2),
+        (y + half + 2, y + half + 2 + band),
+    ):
+        r0, r1 = max(0, int(round(lo))), min(height, int(round(hi)))
+        if r1 > r0:
+            worst = max(worst, float(np.mean(mask[r0:r1, left:right].any(axis=0))))
+    return worst
+
+
+def _has_edge_end(mask: np.ndarray, x_end: float, y: float, thickness: float) -> bool:
+    """True when a thick bar ends in a full-height vertical edge (block/outline side)."""
+    if thickness < 6:
+        return False
+    height, width = mask.shape[:2]
+    r0 = max(0, int(round(y - thickness / 2.0)))
+    r1 = min(height, int(round(y + thickness / 2.0)) + 1)
+    c0, c1 = max(0, int(round(x_end)) - 2), min(width, int(round(x_end)) + 3)
+    if r1 <= r0 or c1 <= c0:
+        return False
+    return float(np.mean(mask[r0:r1, c0:c1].any(axis=1))) >= 0.75
+
+
+def _detect_in_aligned_mask(
+    mask: np.ndarray, min_length: int
+) -> list[tuple[float, float, float, float, float, int]]:
+    """Return rail candidates as (x1, x2, y, confidence, thickness, tick_support)."""
+    height, width = mask.shape[:2]
+    rails = _find_rails(mask, min_length)
+    ticks = _find_ticks(mask)
+    results = []
+    for x1, x2, y, thickness, continuity in rails:
+        length = x2 - x1
+        reach = max(3.0, thickness / 2.0 + 2.0)
+        tolerance = max(6.0, min(length * 0.04, 24.0))
+
+        def usable(
+            tick: tuple[float, float, float], rail_y: float = y, tick_reach: float = reach
+        ) -> bool:
+            return tick[1] - tick_reach <= rail_y <= tick[2] + tick_reach
+
+        def snap(x: float, snap_tolerance: float = tolerance) -> tuple[float, bool]:
+            options = [
+                (abs(tick[0] - x), tick[0])
+                for tick in ticks
+                if usable(tick) and abs(tick[0] - x) <= snap_tolerance
+            ]
+            return (min(options)[1], True) if options else (x, False)
+
+        clutter = _band_clutter(mask, x1, x2, y, thickness)
+        left_edge = _has_edge_end(mask, x1, y, thickness)
+        right_edge = _has_edge_end(mask, x2, y, thickness)
+        if clutter >= 0.25 and not (left_edge and right_edge):
+            continue  # a text baseline or drawing detail, not a scale rail
+        sx1, left_tick = snap(x1)
+        sx2, right_tick = snap(x2)
+        if not left_tick and left_edge:
+            sx1, left_tick = x1, True
+        if not right_tick and right_edge:
+            sx2, right_tick = x2, True
+        if sx2 - sx1 < min_length * 0.9:
+            sx1, sx2, left_tick, right_tick = x1, x2, False, False
+        interior = sum(
+            1
+            for tick in ticks
+            if usable(tick) and sx1 + tolerance < tick[0] < sx2 - tolerance
+        )
+        tick_support = int(left_tick) + int(right_tick)
+        continuity_score = float(np.clip((continuity - 0.75) / 0.22, 0.0, 1.0))
+        confidence = 0.10 + 0.40 * continuity_score + 0.25 * tick_support
+        if interior >= 2:
+            confidence += 0.05
+        if (sx2 - sx1) >= 20 * max(1.0, thickness):
+            confidence += 0.05
+        # Frames and page rules hug the image border; they are rarely the bar.
+        margin = max(2.0, thickness)
+        if y <= margin or y >= height - 1 - margin:
+            confidence -= 0.50
+        results.append(
+            (sx1, sx2, y, float(np.clip(confidence, 0.0, 1.0)), thickness, tick_support)
+        )
+    results.sort(
+        key=lambda r: (r[3] + 0.1 * r[5], math.log1p(r[1] - r[0])), reverse=True
+    )
+    return results
 
 
 def detect_horizontal_scale_bars(
@@ -125,248 +427,136 @@ def detect_horizontal_scale_bars(
     limit: int = 16,
     labels: list[ScaleTextCandidate] | None = None,
 ) -> list[ScaleBarCandidate]:
-    """Find horizontal scale bars while ignoring strokes inside OCR labels."""
-    if image.ndim == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
+    """Find horizontal scale bars (thin rails, ruler lines, outlined/checkered bars).
+
+    The image is deskewed by up to +-3 degrees, converted to an ink mask, and
+    long horizontal structures are extracted. End ticks are used to snap the
+    measured endpoints, and strokes inside OCR labels are ignored.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    if gray.dtype != np.uint8:
+        gray = cv2.normalize(
+            gray, np.empty_like(gray), 0, 255, cv2.NORM_MINMAX
+        ).astype(np.uint8)
     height, width = gray.shape[:2]
-    if width < 3 or height < 3:
+    if width < 32 or height < 8:
         return []
 
-    # Adaptive thresholding handles faded rails and uneven paper lighting.
-    edge_gray = gray
-    if min(height, width) >= 3:
-        filtered_gray = cv2.medianBlur(gray, 3)
-    else:
-        filtered_gray = gray
-    block_size = max(15, (min(height, width) // 8) | 1)
-    if block_size >= min(height, width):
-        block_size = max(3, (min(height, width) - 1) | 1)
-    adaptive = cv2.adaptiveThreshold(
-        filtered_gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        block_size,
-        7,
+    shrink = min(1.0, 4000.0 / max(width, height))
+    if shrink < 1.0 and (
+        round(width * shrink) == 0 or round(height * shrink) == 0
+    ):
+        return []
+    work = (
+        cv2.resize(gray, None, fx=shrink, fy=shrink, interpolation=cv2.INTER_AREA)
+        if shrink < 1
+        else gray
     )
-    edges = cv2.Canny(edge_gray, 35, 120, apertureSize=3)
-    min_length = max(24, int(width * 0.07))
-    lines = cv2.HoughLinesP(
-        edges,
-        rho=1,
-        theta=np.pi / 360,
-        threshold=max(16, int(min_length * 0.35)),
-        minLineLength=min_length,
-        maxLineGap=max(8, int(width * 0.025)),
-    )
-    candidates: list[ScaleBarCandidate] = []
-    vertical_ticks: list[tuple[float, float, float]] = []
-    segments = np.asarray(lines).reshape(-1, 4) if lines is not None else np.empty((0, 4))
-    for raw in segments:
-        x1, y1, x2, y2 = (float(value) for value in raw)
-        if x2 < x1:
-            x1, x2, y1, y2 = x2, x1, y2, y1
-        dx, dy = x2 - x1, y2 - y1
-        angle = abs(math.degrees(math.atan2(dy, dx)))
-        if dx <= max(2.0, abs(dy) * 0.12) and abs(dy) >= max(6, height * 0.025):
-            vertical_ticks.append(((x1 + x2) / 2, min(y1, y2), max(y1, y2)))
-            continue
-        if dx <= 0 or angle > 6:
-            continue
-        candidate = ScaleBarCandidate(x1, y1, x2, y2)
-        if candidate.pixels < min_length:
-            continue
-        duplicate = False
-        for existing_index, existing in enumerate(candidates):
-            same_row = abs((candidate.y1 + candidate.y2) / 2 - (existing.y1 + existing.y2) / 2) <= max(3, height * 0.008)
-            overlap = max(0.0, min(candidate.x2, existing.x2) - max(candidate.x1, existing.x1))
-            shorter = min(candidate.pixels, existing.pixels)
-            if same_row and shorter > 0 and overlap / shorter >= 0.75:
-                duplicate = True
-                if candidate.pixels > existing.pixels:
-                    candidates[existing_index] = candidate
-                break
-        if not duplicate:
-            candidates.append(candidate)
+    work_h, work_w = work.shape[:2]
 
-    # Horizontal opening catches low-contrast rails and bridges tiny gaps that
-    # Hough often splits into several partial segments.
-    horizontal_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (max(12, min(80, width // 24)), 1)
-    )
-    horizontal_mask = cv2.morphologyEx(adaptive, cv2.MORPH_OPEN, horizontal_kernel)
-    count, _, stats, centroids = cv2.connectedComponentsWithStats(
-        horizontal_mask, connectivity=8
-    )
-    for component in range(1, count):
-        x, y, component_width, component_height, area = stats[component]
-        if component_width < min_length or component_height > max(8, height * 0.02):
-            continue
-        if area < component_width * 0.25:
-            continue
-        candidate = ScaleBarCandidate(
-            float(x), float(centroids[component][1]),
-            float(x + component_width - 1), float(centroids[component][1]),
+    angle = _estimate_skew(_dark_mask(work))
+    center = (work_w / 2.0, work_h / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    if angle:
+        aligned_gray = cv2.warpAffine(
+            work,
+            matrix,
+            (work_w, work_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
         )
-        duplicate = False
-        for index, existing in enumerate(candidates):
-            same_row = abs(candidate.y1 - (existing.y1 + existing.y2) / 2) <= max(3, height * 0.008)
-            overlap = max(0.0, min(candidate.x2, existing.x2) - max(candidate.x1, existing.x1))
-            shorter = min(candidate.pixels, existing.pixels)
-            if same_row and shorter > 0 and overlap / shorter >= 0.65:
-                duplicate = True
-                if candidate.pixels > existing.pixels:
-                    candidates[index] = candidate
-                break
-        if not duplicate:
-            candidates.append(candidate)
+    else:
+        aligned_gray = work
+    inverse = cv2.invertAffineTransform(matrix)
+    mask = _dark_mask(aligned_gray)
 
-    vertical_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (1, max(8, min(80, height // 30)))
-    )
-    vertical_mask = cv2.morphologyEx(adaptive, cv2.MORPH_OPEN, vertical_kernel)
-    tick_count, _, tick_stats, tick_centroids = cv2.connectedComponentsWithStats(
-        vertical_mask, connectivity=8
-    )
-    for component in range(1, tick_count):
-        x, y, tick_width, tick_height, _area = tick_stats[component]
-        if tick_height >= max(6, height * 0.025) and tick_width <= max(8, width * 0.02):
-            vertical_ticks.append(
-                (
-                    float(tick_centroids[component][0]),
-                    float(y),
-                    float(y + tick_height - 1),
+    text_regions = [
+        (label.bounds, max(1.0, (label.bounds[3] - label.bounds[1]) * 0.08))
+        for label in labels or []
+    ]
+
+    def overlaps_text(candidate: ScaleBarCandidate) -> bool:
+        y_center = (candidate.y1 + candidate.y2) / 2
+        for (x0, y0, x1, y1), y_padding in text_regions:
+            if not (y0 - y_padding <= y_center <= y1 + y_padding):
+                continue
+            overlap = max(0.0, min(candidate.x2, x1) - max(candidate.x1, x0))
+            if (
+                overlap >= max(4.0, (x1 - x0) * 0.2)
+                and candidate.pixels < (x1 - x0) * 3
+            ):
+                return True
+        return False
+
+    candidates: list[ScaleBarCandidate] = []
+
+    def candidate_quality(candidate: ScaleBarCandidate) -> tuple[float, float]:
+        return (
+            candidate.confidence + 0.10 * candidate.tick_support,
+            math.log1p(candidate.pixels),
+        )
+
+    def same_rail(left: ScaleBarCandidate, right: ScaleBarCandidate) -> bool:
+        left_x1, left_x2 = sorted((left.x1, left.x2))
+        right_x1, right_x2 = sorted((right.x1, right.x2))
+        overlap = max(0.0, min(left_x2, right_x2) - max(left_x1, right_x1))
+        shorter = min(left.pixels, right.pixels)
+        y_left = (left.y1 + left.y2) / 2
+        y_right = (right.y1 + right.y2) / 2
+        return (
+            shorter > 0
+            and overlap / shorter >= 0.98
+            and abs(y_left - y_right) <= 0.5
+        )
+
+    for pass_index, fraction in enumerate((0.07, 0.035)):
+        raw = _detect_in_aligned_mask(mask, max(24, int(work_w * fraction)))
+        pass_candidates: list[ScaleBarCandidate] = []
+        for sx1, sx2, y, confidence, _thickness, tick_support in raw:
+            points = np.array([[sx1, y, 1.0], [sx2, y, 1.0]]) @ inverse.T / shrink
+            pass_candidates.append(
+                ScaleBarCandidate(
+                    float(points[0][0]),
+                    float(points[0][1]),
+                    float(points[1][0]),
+                    float(points[1][1]),
+                    confidence,
+                    tick_support,
                 )
             )
 
-    # Extend detected horizontal strokes to nearby endpoint ticks. In scanned
-    # rulers, the horizontal rail can stop just short of the full-height marks.
-    refined: list[ScaleBarCandidate] = []
-    for candidate in candidates:
-        y_center = (candidate.y1 + candidate.y2) / 2
-        tick_tolerance = max(8.0, min(width * 0.05, candidate.pixels * 0.08))
-
-        def snap_endpoint(
-            x: float,
-            y_center: float = y_center,
-            tick_tolerance: float = tick_tolerance,
-        ) -> tuple[float, bool]:
-            possible: list[tuple[float, float]] = []
-            for tick_x, tick_y0, tick_y1 in vertical_ticks:
-                x_distance = abs(tick_x - x)
-                if x_distance > tick_tolerance:
-                    continue
-                vertical_gap = max(tick_y0 - y_center, 0.0, y_center - tick_y1)
-                if vertical_gap <= max(4.0, height * 0.015):
-                    possible.append((x_distance + vertical_gap * 0.5, tick_x))
-            if not possible:
-                return x, False
-            return min(possible)[1], True
-
-        sx1, left_tick = snap_endpoint(candidate.x1)
-        sx2, right_tick = snap_endpoint(candidate.x2)
-        if sx2 < sx1:
-            sx1, sx2 = sx2, sx1
-
-        def refine_rail_endpoint(
-            x: float,
-            is_start: bool,
-            candidate: ScaleBarCandidate = candidate,
-        ) -> float:
-            """Tighten an unticked endpoint to the local dark-pixel transition."""
-            margin = max(5, min(18, int(candidate.pixels * 0.025)))
-            left = max(0, int(math.floor(x)) - margin)
-            right = min(width - 1, int(math.ceil(x)) + margin)
-            xs = np.arange(left, right + 1)
-            if len(xs) < 4:
-                return x
-            line_y = np.interp(
-                xs,
-                [candidate.x1, candidate.x2],
-                [candidate.y1, candidate.y2],
-            )
-            support = np.zeros(len(xs), dtype=float)
-            for index, (px, py) in enumerate(zip(xs, line_y, strict=False)):
-                iy = int(round(py))
-                y0, y1 = max(0, iy - 2), min(height, iy + 3)
-                if y1 > y0:
-                    support[index] = float(np.mean(adaptive[y0:y1, px] > 0))
-            active = support >= 0.25
-            anchor = int(np.argmin(np.abs(xs - x)))
-            candidates_active = np.flatnonzero(active)
-            if not len(candidates_active):
-                return x
-            # Stay on the component touching the detected endpoint; a nearby
-            # text stroke or second rail must not pull the measured endpoint.
-            closest = int(candidates_active[np.argmin(np.abs(candidates_active - anchor))])
-            if abs(int(xs[closest]) - x) > 4:
-                return x
-            run_start = closest
-            run_end = closest
-            while run_start > 0 and active[run_start - 1]:
-                run_start -= 1
-            while run_end + 1 < len(active) and active[run_end + 1]:
-                run_end += 1
-            if run_end - run_start < 2:
-                return x
-            threshold = 0.25
-            if is_start and run_start > 0:
-                before, after = support[run_start - 1], support[run_start]
-                fraction = (threshold - before) / max(after - before, 1e-6)
-                return float(xs[run_start - 1] + np.clip(fraction, 0, 1))
-            if not is_start and run_end + 1 < len(xs):
-                before, after = support[run_end], support[run_end + 1]
-                fraction = (before - threshold) / max(before - after, 1e-6)
-                return float(xs[run_end] + np.clip(fraction, 0, 1))
-            return float(xs[run_start] if is_start else xs[run_end])
-
-        if not left_tick:
-            sx1 = refine_rail_endpoint(sx1, True)
-        if not right_tick:
-            sx2 = refine_rail_endpoint(sx2, False)
-        if sx2 < sx1:
-            sx1, sx2 = sx2, sx1
-        # Measure center-band continuity; dark surroundings alone do not score
-        # as a rail, so this also rejects short text strokes and paper texture.
-        sample_x = np.linspace(sx1, sx2, num=min(160, max(24, int(sx2 - sx1))))
-        sample_y = np.linspace(candidate.y1, candidate.y2, num=len(sample_x))
-        support = []
-        for px, py in zip(sample_x, sample_y, strict=False):
-            ix, iy = int(round(px)), int(round(py))
-            y0, y1 = max(0, iy - 2), min(height, iy + 3)
-            x0, x1 = max(0, ix - 1), min(width, ix + 2)
-            support.append(float(np.mean(gray[y0:y1, x0:x1])) < 175)
-        continuity = float(np.mean(support)) if support else 0.0
-        tick_support = int(left_tick) + int(right_tick)
-        # Endpoint ticks are strong evidence that a long rail is a measured
-        # scale bar. Give them enough weight that a thin but continuous rail
-        # with both ticks can pass the conservative auto-apply threshold.
-        confidence = min(1.0, 0.35 * continuity + 0.32 * tick_support + 0.10)
-        refined.append(
-            ScaleBarCandidate(sx1, candidate.y1, sx2, candidate.y2, confidence, tick_support)
-        )
-
-    if labels:
-        text_regions = [
-            (label.bounds, max(1.0, (label.bounds[3] - label.bounds[1]) * 0.08))
-            for label in labels
+        pass_candidates = [
+            candidate for candidate in pass_candidates if not overlaps_text(candidate)
         ]
+        for candidate in pass_candidates:
+            duplicate_index = next(
+                (
+                    index
+                    for index, existing in enumerate(candidates)
+                    if same_rail(candidate, existing)
+                ),
+                None,
+            )
+            if duplicate_index is None:
+                candidates.append(candidate)
+            elif candidate_quality(candidate) > candidate_quality(
+                candidates[duplicate_index]
+            ):
+                candidates[duplicate_index] = candidate
 
-        def overlaps_text(candidate: ScaleBarCandidate) -> bool:
-            y_center = (candidate.y1 + candidate.y2) / 2
-            for (x0, y0, x1, y1), y_padding in text_regions:
-                if not (y0 - y_padding <= y_center <= y1 + y_padding):
-                    continue
-                overlap = max(0.0, min(candidate.x2, x1) - max(candidate.x1, x0))
-                if overlap >= max(4.0, (x1 - x0) * 0.2):
-                    return True
-            return False
+        if pass_index == 0 and any(
+            candidate.confidence >= _MIN_CONFIDENT_BAR_CONFIDENCE
+            and candidate.tick_support >= 1
+            for candidate in pass_candidates
+        ):
+            if not labels:
+                break
+            ordered_pass_candidates = sorted(
+                pass_candidates, key=candidate_quality, reverse=True
+            )
+            if find_confident_scale_match(labels, ordered_pass_candidates) is not None:
+                break
 
-        refined = [candidate for candidate in refined if not overlaps_text(candidate)]
-
-    candidates = refined
     candidates.sort(
         key=lambda item: (
             item.confidence + 0.10 * item.tick_support,
@@ -407,11 +597,8 @@ def rank_scale_bars(
         bar
         for bar in bars
         if not (
-            ly0 - text_y_padding
-            <= (bar.y1 + bar.y2) / 2
-            <= ly1 + text_y_padding
-            and max(0.0, min(bar.x2, lx1) - max(bar.x1, lx0))
-            >= min_text_overlap
+            ly0 - text_y_padding <= (bar.y1 + bar.y2) / 2 <= ly1 + text_y_padding
+            and max(0.0, min(bar.x2, lx1) - max(bar.x1, lx0)) >= min_text_overlap
         )
     ]
     vertical_scale = max(16.0, label_height * 2.0, height * 0.02)
@@ -434,62 +621,118 @@ def rank_scale_bars(
     return sorted(bars, key=score, reverse=True)
 
 
+def find_confident_scale_match(
+    labels: list[ScaleTextCandidate], bars: list[ScaleBarCandidate]
+) -> tuple[ScaleTextCandidate, ScaleBarCandidate] | None:
+    """Return the confident OCR label and bar when exactly one pair agrees."""
+    if not labels or not bars:
+        return None
+
+    confident_labels = [
+        label
+        for label in labels
+        if label.confidence >= 0.60
+        and math.isfinite(label.length_mm)
+        and label.length_mm > 0
+    ]
+    if not confident_labels:
+        return None
+
+    def label_bar_gaps(
+        label: ScaleTextCandidate, bar: ScaleBarCandidate
+    ) -> tuple[float, float] | None:
+        if not math.isfinite(bar.pixels) or bar.pixels <= 0:
+            return None
+        lx0, ly0, lx1, ly1 = label.bounds
+        if lx1 <= lx0 or ly1 <= ly0 or not all(
+            math.isfinite(value) for value in label.bounds
+        ):
+            return None
+        label_width = max(1.0, lx1 - lx0)
+        label_height = max(1.0, ly1 - ly0)
+        if bar.pixels < max(24.0, label_width * 1.5):
+            return None
+        horizontal_gap = max(lx0 - bar.x2, bar.x1 - lx1, 0.0)
+        vertical_gap = max(ly0 - (bar.y1 + bar.y2) / 2, (bar.y1 + bar.y2) / 2 - ly1, 0.0)
+        if horizontal_gap > max(32.0, label_width * 1.25):
+            return None
+        if vertical_gap > max(24.0, label_height * 3.0):
+            return None
+        return horizontal_gap, vertical_gap
+
+    plausible: list[tuple[ScaleBarCandidate, list[ScaleTextCandidate]]] = []
+    for bar in bars:
+        if (
+            not math.isfinite(bar.confidence)
+            or bar.confidence < _MIN_CONFIDENT_BAR_CONFIDENCE
+            or bar.tick_support < 1
+        ):
+            continue
+        supported_by: list[ScaleTextCandidate] = []
+        ambiguous_far_match = False
+        for label in confident_labels:
+            gaps = label_bar_gaps(label, bar)
+            if gaps is None:
+                continue
+            supported_by.append(label)
+            if gaps[1] > 24.0 and bar.tick_support < 2:
+                ambiguous_far_match = any(
+                    other is not bar
+                    and (other_gaps := label_bar_gaps(label, other)) is not None
+                    and other_gaps[1] < gaps[1]
+                    for other in bars
+                )
+                if ambiguous_far_match:
+                    break
+        if supported_by and not ambiguous_far_match:
+            plausible.append((bar, supported_by))
+
+    if len(plausible) != 1 or plausible[0][0] != bars[0]:
+        return None
+
+    best_bar, supporting_labels = plausible[0]
+
+    distinct_lengths = {round(label.length_mm, 6) for label in supporting_labels}
+    if len(distinct_lengths) != 1:
+        return None
+    return max(supporting_labels, key=lambda label: label.confidence), best_bar
+
+
 def has_confident_scale_match(
     labels: list[ScaleTextCandidate], bars: list[ScaleBarCandidate]
 ) -> bool:
     """Return true only when OCR and a single strong, nearby bar agree."""
-    if not labels or not bars:
-        return False
+    return find_confident_scale_match(labels, bars) is not None
 
-    confident_labels = [label for label in labels if label.confidence >= 0.60]
-    if not confident_labels:
-        return False
 
-    plausible: list[ScaleBarCandidate] = []
-    for bar in bars:
-        if bar.confidence < 0.82 or bar.tick_support < 1:
-            continue
-        bar_y = (bar.y1 + bar.y2) / 2
-        supported_by: list[ScaleTextCandidate] = []
-        for label in confident_labels:
-            lx0, ly0, lx1, ly1 = label.bounds
-            if lx1 <= lx0 or ly1 <= ly0:
-                continue
-            label_width = max(1.0, lx1 - lx0)
-            label_height = max(1.0, ly1 - ly0)
-            if bar.pixels < max(24.0, label_width * 1.5):
-                continue
-            horizontal_gap = max(lx0 - bar.x2, bar.x1 - lx1, 0.0)
-            vertical_gap = max(ly0 - bar_y, bar_y - ly1, 0.0)
-            if horizontal_gap > max(32.0, label_width * 1.25):
-                continue
-            if vertical_gap > max(24.0, label_height * 2.0):
-                continue
-            supported_by.append(label)
-        if supported_by:
-            plausible.append(bar)
+def associate_label_with_bar(
+    labels: list[ScaleTextCandidate], bar: ScaleBarCandidate | None
+) -> list[ScaleTextCandidate]:
+    """Reorder labels so the one that belongs to ``bar`` comes first.
 
-    if len(plausible) != 1 or plausible[0] != bars[0]:
-        return False
+    OCR confidence alone can pick "5cm" for a 10 cm bar. A label that sits near
+    the bar, especially centred on one of its ends (``0  5  10cm``), wins.
+    """
+    if bar is None or len(labels) < 2:
+        return list(labels)
+    bar_y = (bar.y1 + bar.y2) / 2.0
 
-    best_bar = plausible[0]
-    bar_y = (best_bar.y1 + best_bar.y2) / 2
-    supporting_labels: list[ScaleTextCandidate] = []
-    for label in confident_labels:
-        lx0, ly0, lx1, ly1 = label.bounds
-        if lx1 <= lx0 or ly1 <= ly0:
-            continue
-        label_width = max(1.0, lx1 - lx0)
-        label_height = max(1.0, ly1 - ly0)
-        if best_bar.pixels < max(24.0, label_width * 1.5):
-            continue
-        horizontal_gap = max(lx0 - best_bar.x2, best_bar.x1 - lx1, 0.0)
-        vertical_gap = max(ly0 - bar_y, bar_y - ly1, 0.0)
-        if horizontal_gap <= max(32.0, label_width * 1.25) and vertical_gap <= max(24.0, label_height * 2.0):
-            supporting_labels.append(label)
+    def score(label: ScaleTextCandidate) -> float:
+        x0, y0, x1, y1 = label.bounds
+        if x1 <= x0 or y1 <= y0:
+            return 0.5 * label.confidence
+        label_w, label_h = x1 - x0, y1 - y0
+        h_gap = max(x0 - bar.x2, bar.x1 - x1, 0.0)
+        v_gap = max(y0 - bar_y, bar_y - y1, 0.0)
+        proximity = math.exp(
+            -h_gap / max(24.0, label_w * 1.25) - v_gap / max(16.0, label_h * 3.0)
+        )
+        centre = (x0 + x1) / 2.0
+        end_distance = min(abs(centre - bar.x1), abs(centre - bar.x2))
+        end_bonus = 0.4 if end_distance <= max(label_w, 0.15 * bar.pixels) else 0.0
+        return 0.5 * label.confidence + proximity + end_bonus
 
-    distinct_lengths = {round(label.length_mm, 6) for label in supporting_labels}
-    return len(distinct_lengths) == 1
+    return sorted(labels, key=score, reverse=True)
 
 
 def analyze_scale_candidates(
@@ -501,12 +744,18 @@ def analyze_scale_candidates(
     except Exception:
         labels = []
     try:
-        bars = detect_horizontal_scale_bars(image, labels=labels)
+        detected_bars = detect_horizontal_scale_bars(image, labels=labels)
     except Exception:
-        bars = []
+        detected_bars = []
 
     best_label = labels[0] if labels else None
-    return labels, rank_scale_bars(bars, best_label, image.shape)
+    bars = rank_scale_bars(detected_bars, best_label, image.shape)
+    # With the bar chosen, pick the label that actually belongs to it.
+    labels = associate_label_with_bar(labels, bars[0] if bars else None)
+    if labels and labels[0] is not best_label:
+        bars = rank_scale_bars(detected_bars, labels[0], image.shape)
+        labels = associate_label_with_bar(labels, bars[0] if bars else None)
+    return labels, bars
 
 
 def extract_scale_from_image(
@@ -518,7 +767,9 @@ def extract_scale_from_image(
     best_bar = bars[0] if bars else None
 
     mm_per_px = None
-    if best_label and best_bar and best_bar.pixels > 0:
+    match = find_confident_scale_match(labels, bars)
+    if match is not None:
+        best_label, best_bar = match
         mm_per_px = best_label.length_mm / best_bar.pixels
 
     return best_label, best_bar, mm_per_px
@@ -536,7 +787,9 @@ def classify_pottery_and_scale_with_candidates(
 
     def compute_scale_score(
         path: Path,
-    ) -> tuple[float, tuple[int, int] | None, list[ScaleTextCandidate], list[ScaleBarCandidate]]:
+    ) -> tuple[
+        float, tuple[int, int] | None, list[ScaleTextCandidate], list[ScaleBarCandidate]
+    ]:
         try:
             image = read_image(path)
         except Exception:
@@ -606,6 +859,7 @@ def classify_pottery_and_scale(
     path_b: str | Path,
 ) -> tuple[Path, Path]:
     """Return the classified pottery image path and scale image path."""
-    pottery_path, scale_path, _, _ = classify_pottery_and_scale_with_candidates(path_a, path_b)
+    pottery_path, scale_path, _, _ = classify_pottery_and_scale_with_candidates(
+        path_a, path_b
+    )
     return pottery_path, scale_path
-

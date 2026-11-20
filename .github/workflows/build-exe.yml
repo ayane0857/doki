@@ -25,6 +25,11 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
       MPLBACKEND: Agg
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      PYTHONFAULTHANDLER: "1"
 
     steps:
       - name: Check out repository
