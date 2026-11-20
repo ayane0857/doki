@@ -117,11 +117,31 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
 
-    from pottery_volume_gui_style import APP_STYLESHEET
+    from PySide6.QtCore import QSettings
+
+    from pottery_volume_gui_style import stylesheet_for_theme
     from pottery_volume_gui_window import MainWindow
 
     app.setStyle("Fusion")
-    app.setStyleSheet(APP_STYLESHEET)
+    settings = QSettings()
+    theme = settings.value("theme_mode", None, type=str)
+    if theme not in {"system", "light", "dark"}:
+        legacy_dark_mode = settings.value("dark_mode", None, type=bool)
+        theme = (
+            "dark"
+            if legacy_dark_mode is True
+            else "light"
+            if settings.contains("dark_mode")
+            else "system"
+        )
+    app.setProperty("pottery_theme_mode", theme)
+
+    def apply_theme() -> None:
+        current_theme = app.property("pottery_theme_mode") or "system"
+        app.setStyleSheet(stylesheet_for_theme(current_theme, app))
+
+    apply_theme()
+    app.styleHints().colorSchemeChanged.connect(apply_theme)
     window = MainWindow(initial_image)
     window.show()
     return app.exec()
