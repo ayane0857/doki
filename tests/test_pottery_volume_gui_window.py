@@ -94,6 +94,10 @@ def test_applied_mm_precision_still_matches_ocr_label_in_dialog():
         assert window.known_mm_edit.text() == "123.456789"
         assert dialog.label_combo.currentData() == label
         assert dialog.label_combo.count() == 1
+        assert dialog.length_spin.value() == pytest.approx(123.456789)
+        dialog.accept()
+        assert dialog.length_mm == pytest.approx(123.456789)
+        assert dialog.mm_per_px == pytest.approx(123.456789 / 200)
     finally:
         if dialog is not None:
             dialog.close()
@@ -194,6 +198,7 @@ def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch):
     label_10cm = ScaleTextCandidate("10cm", 10, "cm", 100, 0.95, (260, 50, 300, 70))
     automatic_bar = ScaleBarCandidate(20, 100, 220, 100, 0.95, 1)
     corrected_bar = ScaleBarCandidate(30, 100, 230, 100, 0.92, 1)
+    corrected_points = ((30.0, 100.0), (430.0, 100.0))
     captured_selections = []
 
     class DialogStub:
@@ -207,11 +212,15 @@ def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch):
             *,
             selected_label=None,
             selected_bar=None,
+            selected_points=None,
         ):
-            captured_selections.append((default_mm, selected_label, selected_bar))
-            self.mm_per_px = 0.25
-            self.line_pixels = 200.0
+            captured_selections.append(
+                (default_mm, selected_label, selected_bar, selected_points)
+            )
+            self.mm_per_px = 0.125
+            self.line_pixels = 400.0
             self.length_mm = 50.0
+            self.line_points = corrected_points
             self.bars = [automatic_bar, corrected_bar]
 
             class LabelCombo:
@@ -236,23 +245,26 @@ def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch):
     window.scale_labels = [label_5cm, label_10cm]
     window.scale_bars = [automatic_bar, corrected_bar]
     window.scale_detection_path = image_path.resolve()
+    window.scale_applied_path = image_path.resolve()
     window.scale_applied_label = label_10cm
     window.scale_applied_bar = automatic_bar
+    window.scale_applied_points = ((20.0, 100.0), (220.0, 100.0))
     window.known_mm_edit.setText("100")
 
     try:
         window.measure_scale()
         assert window.scale_applied_bar == corrected_bar
         assert window.scale_applied_label == label_5cm
+        assert window.scale_applied_points == corrected_points
         assert window.known_mm_edit.text() == "50"
-        assert window.bar_px_edit.text() == "200.00"
-        assert window.direct_edit.text() == "0.25"
+        assert window.bar_px_edit.text() == "400.00"
+        assert window.direct_edit.text() == "0.125"
         assert window.scale_mode.currentText() == "mm/px を直接指定"
         window.measure_scale()
 
         assert captured_selections == [
-            (100.0, label_10cm, automatic_bar),
-            (50.0, label_5cm, corrected_bar),
+            (100.0, label_10cm, automatic_bar, ((20.0, 100.0), (220.0, 100.0))),
+            (50.0, label_5cm, corrected_bar, corrected_points),
         ]
 
         dialog = ScaleCalibrationDialog(
@@ -263,14 +275,91 @@ def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch):
             None,
             selected_label=window.scale_applied_label,
             selected_bar=window.scale_applied_bar,
+            selected_points=window.scale_applied_points,
         )
         try:
             assert dialog.label_combo.currentData() == label_5cm
             assert dialog.bars[dialog.bar_combo.currentIndex()] == corrected_bar
+            assert dialog._selected_points() == list(corrected_points)
             dialog.accept()
             assert dialog.length_mm == pytest.approx(50)
-            assert dialog.line_pixels == pytest.approx(200)
+            assert dialog.line_pixels == pytest.approx(400)
+            assert dialog.line_points == corrected_points
+            assert dialog.mm_per_px == pytest.approx(0.125)
+        finally:
+            dialog.close()
+            app.processEvents()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_manual_endpoints_persist_on_reopen_without_detected_candidates(monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    import pottery_volume_gui_window as window_module
+    from pottery_volume_gui_scale import ScaleCalibrationDialog
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(None)
+    image_path = Path(__file__).parent / "fixtures" / "scale_image.png"
+    manual_points = ((20.0, 100.0), (420.0, 100.0))
+    captured_points = []
+
+    class DialogStub:
+        def __init__(self, _path, _labels, _bars, _default_mm, _parent, **kwargs):
+            captured_points.append(kwargs.get("selected_points"))
+            self.mm_per_px = 0.25
+            self.line_pixels = 400.0
+            self.length_mm = 100.0
+            self.line_points = manual_points
+            self.bars = []
+
+            class LabelCombo:
+                def currentData(self):
+                    return None
+
+            class BarCombo:
+                def currentIndex(self):
+                    return 0
+
+            self.label_combo = LabelCombo()
+            self.bar_combo = BarCombo()
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(window_module, "ScaleCalibrationDialog", DialogStub)
+    window.scale_image_edit.setText(str(image_path))
+    window.known_mm_edit.setText("100")
+
+    try:
+        window.measure_scale()
+
+        assert window.scale_applied_path == image_path.resolve()
+        assert window.scale_applied_bar is None
+        assert window.scale_applied_points == manual_points
+        assert window.bar_px_edit.text() == "400.00"
+        assert window.direct_edit.text() == "0.25"
+
+        dialog = ScaleCalibrationDialog(
+            image_path,
+            [],
+            [],
+            100,
+            None,
+            selected_points=window.scale_applied_points,
+        )
+        try:
+            assert dialog._selected_points() == list(manual_points)
+            dialog.accept()
+            assert dialog.length_mm == pytest.approx(100)
+            assert dialog.line_pixels == pytest.approx(400)
             assert dialog.mm_per_px == pytest.approx(0.25)
+            assert dialog.line_points == manual_points
         finally:
             dialog.close()
             app.processEvents()

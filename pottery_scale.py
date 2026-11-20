@@ -551,6 +551,11 @@ def detect_horizontal_scale_bars(
         ):
             if not labels:
                 break
+            ordered_pass_candidates = sorted(
+                pass_candidates, key=candidate_quality, reverse=True
+            )
+            if find_confident_scale_match(labels, ordered_pass_candidates) is not None:
+                break
 
     candidates.sort(
         key=lambda item: (

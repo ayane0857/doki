@@ -203,6 +203,10 @@ class MainWindow(QMainWindow):
         self.scale_bars: list[ScaleBarCandidate] = []
         self.scale_applied_label: ScaleTextCandidate | None = None
         self.scale_applied_bar: ScaleBarCandidate | None = None
+        self.scale_applied_path: Path | None = None
+        self.scale_applied_points: tuple[
+            tuple[float, float], tuple[float, float]
+        ] | None = None
         self.scale_detection_path: Path | None = None
         self.current_analysis: AnalysisOutput | None = None
         self._build_ui()
@@ -628,8 +632,14 @@ class MainWindow(QMainWindow):
         self.scale_bars = bars
         self.scale_detection_path = path.resolve()
         match = find_confident_scale_match(labels, bars)
+        self.scale_applied_path = path.resolve()
         self.scale_applied_label = match[0] if match is not None else None
         self.scale_applied_bar = match[1] if match is not None else None
+        self.scale_applied_points = (
+            ((match[1].x1, match[1].y1), (match[1].x2, match[1].y2))
+            if match is not None
+            else None
+        )
         label = labels[0] if labels else None
         bar = bars[0] if bars else None
         if match is not None:
@@ -683,15 +693,19 @@ class MainWindow(QMainWindow):
             bars_snapshot = tuple(bars_reference)
             applied_label_snapshot = self.scale_applied_label
             applied_bar_snapshot = self.scale_applied_bar
+            applied_path_snapshot = self.scale_applied_path
+            applied_points_snapshot = self.scale_applied_points
             resolved_path = path.resolve()
-            same_image = (
+            same_detection_image = (
                 detection_path_snapshot is not None
                 and detection_path_snapshot == resolved_path
             )
-            labels = labels_reference if same_image else []
-            bars = bars_reference if same_image else []
-            selected_label = self.scale_applied_label if same_image else None
-            selected_bar = self.scale_applied_bar if same_image else None
+            same_applied_image = applied_path_snapshot == resolved_path
+            labels = labels_reference if same_detection_image else []
+            bars = bars_reference if same_detection_image else []
+            selected_label = self.scale_applied_label if same_applied_image else None
+            selected_bar = self.scale_applied_bar if same_applied_image else None
+            selected_points = self.scale_applied_points if same_applied_image else None
             try:
                 default_mm = float(self.known_mm_edit.text().strip())
             except ValueError:
@@ -704,6 +718,7 @@ class MainWindow(QMainWindow):
                 self,
                 selected_label=selected_label,
                 selected_bar=selected_bar,
+                selected_points=selected_points,
             )
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 dialog.deleteLater()
@@ -716,6 +731,8 @@ class MainWindow(QMainWindow):
                 and tuple(self.scale_bars) == bars_snapshot
                 and self.scale_applied_label is applied_label_snapshot
                 and self.scale_applied_bar is applied_bar_snapshot
+                and self.scale_applied_path == applied_path_snapshot
+                and self.scale_applied_points == applied_points_snapshot
             )
             if not detection_state_unchanged:
                 dialog.deleteLater()
@@ -724,23 +741,30 @@ class MainWindow(QMainWindow):
             confirmed_length_mm = dialog.length_mm
             mm_per_px = dialog.mm_per_px
             line_pixels = dialog.line_pixels
-            if mm_per_px is None or line_pixels is None or confirmed_length_mm is None:
+            line_points = dialog.line_points
+            if (
+                mm_per_px is None
+                or line_pixels is None
+                or confirmed_length_mm is None
+                or line_points is None
+            ):
                 dialog.deleteLater()
                 raise ValueError("換算値を計算できませんでした。")
             self.known_mm_edit.setText(f"{confirmed_length_mm:.12g}")
-            if same_image:
-                selected_label = dialog.label_combo.currentData()
-                self.scale_applied_label = (
-                    selected_label
-                    if isinstance(selected_label, ScaleTextCandidate)
-                    else None
-                )
-                selected_bar_index = dialog.bar_combo.currentIndex()
-                self.scale_applied_bar = (
-                    dialog.bars[selected_bar_index]
-                    if 0 <= selected_bar_index < len(dialog.bars)
-                    else None
-                )
+            selected_label = dialog.label_combo.currentData()
+            self.scale_applied_label = (
+                selected_label
+                if isinstance(selected_label, ScaleTextCandidate)
+                else None
+            )
+            selected_bar_index = dialog.bar_combo.currentIndex()
+            self.scale_applied_bar = (
+                dialog.bars[selected_bar_index]
+                if 0 <= selected_bar_index < len(dialog.bars)
+                else None
+            )
+            self.scale_applied_path = resolved_path
+            self.scale_applied_points = line_points
             dialog.deleteLater()
             self.scale_generation += 1
             self.direct_edit.setText(f"{mm_per_px:.10g}")
