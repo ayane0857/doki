@@ -371,25 +371,29 @@ def _detect_in_aligned_mask(
         reach = max(3.0, thickness / 2.0 + 2.0)
         tolerance = max(6.0, min(length * 0.04, 24.0))
 
-        def usable(tick: tuple[float, float, float]) -> bool:
-            return tick[1] - reach <= y <= tick[2] + reach
+        def usable(
+            tick: tuple[float, float, float], rail_y: float = y, tick_reach: float = reach
+        ) -> bool:
+            return tick[1] - tick_reach <= rail_y <= tick[2] + tick_reach
 
-        def snap(x: float) -> tuple[float, bool]:
+        def snap(x: float, snap_tolerance: float = tolerance) -> tuple[float, bool]:
             options = [
                 (abs(tick[0] - x), tick[0])
                 for tick in ticks
-                if usable(tick) and abs(tick[0] - x) <= tolerance
+                if usable(tick) and abs(tick[0] - x) <= snap_tolerance
             ]
             return (min(options)[1], True) if options else (x, False)
 
         clutter = _band_clutter(mask, x1, x2, y, thickness)
-        if clutter >= 0.25:
+        left_edge = _has_edge_end(mask, x1, y, thickness)
+        right_edge = _has_edge_end(mask, x2, y, thickness)
+        if clutter >= 0.25 and not (left_edge and right_edge):
             continue  # a text baseline or drawing detail, not a scale rail
         sx1, left_tick = snap(x1)
         sx2, right_tick = snap(x2)
-        if not left_tick and _has_edge_end(mask, x1, y, thickness):
+        if not left_tick and left_edge:
             sx1, left_tick = x1, True
-        if not right_tick and _has_edge_end(mask, x2, y, thickness):
+        if not right_tick and right_edge:
             sx2, right_tick = x2, True
         if sx2 - sx1 < min_length * 0.9:
             sx1, sx2, left_tick, right_tick = x1, x2, False, False
@@ -431,7 +435,9 @@ def detect_horizontal_scale_bars(
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     if gray.dtype != np.uint8:
-        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        gray = cv2.normalize(
+            gray, np.empty_like(gray), 0, 255, cv2.NORM_MINMAX
+        ).astype(np.uint8)
     height, width = gray.shape[:2]
     if width < 32 or height < 8:
         return []
