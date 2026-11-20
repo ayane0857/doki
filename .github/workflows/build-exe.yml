@@ -108,8 +108,10 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: PotteryVolume_ScaleOCR-${{ github.sha }}
-          path: dist/PotteryVolume_ScaleOCR
+          name: PotteryVolume-Windows-${{ github.sha }}
+          path: |
+            dist/PotteryVolume/
+            dist/PotteryVolume_gui/
           if-no-files-found: error
           compression-level: 6
           retention-days: 14

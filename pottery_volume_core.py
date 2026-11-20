@@ -457,6 +457,22 @@ def extract_profiles(
             section.warnings.append(
                 "口縁付近の軸から伸びる横線を内面輪郭から除外しました。"
             )
+        if len(y_px) >= 4:
+            # A terminal fragment can survive filtering; reject a jump unlike recent contour movement.
+            terminal_adjusted = False
+            for profile in (raw_in, raw_out):
+                recent = profile[-4:-1]
+                if not np.isfinite(profile[-1]) or not np.all(np.isfinite(recent)):
+                    continue
+                recent_step = float(np.median(np.abs(np.diff(recent))))
+                terminal_step = abs(float(profile[-1] - profile[-2]))
+                if terminal_step > max(4.0, 3.0 * recent_step):
+                    profile[-1] = float(np.median(recent))
+                    terminal_adjusted = True
+            if terminal_adjusted:
+                section.warnings.append(
+                    "器底付近の輪郭に孤立点があるため、末端半径を補正しました。"
+                )
     valid = np.isfinite(raw_in) & np.isfinite(raw_out)
     if np.count_nonzero(valid) < 2:
         raise ValueError("内面・外面輪郭を行ごとに抽出できませんでした。")

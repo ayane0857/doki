@@ -1,14 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('THIRD_PARTY_LICENSES.txt', '.')]
+datas = [
+    ('THIRD_PARTY_LICENSES.txt', '.'),
+    ('docs/gui/README.txt', '.'),
+]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('rapidocr')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-for package in ('PySide6', 'shapely'):
-    tmp_ret = collect_all(package)
-    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('PySide6')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('shapely')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
@@ -31,7 +35,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='PotteryVolume_ScaleOCR',
+    name='PotteryVolume_gui',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -50,5 +54,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='PotteryVolume_ScaleOCR',
+    name='PotteryVolume_gui',
 )

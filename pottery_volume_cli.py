@@ -329,6 +329,14 @@ def _print_result(
         print(f"警告: {warning}", file=sys.stderr)
 
 
+def _configure_console_output() -> None:
+    """Keep unsupported characters from aborting output on legacy Windows code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(errors="backslashreplace")
+
+
 def analyze_detailed(params: AnalysisParams) -> AnalysisOutput:
     """Analyze an image from structured inputs and retain its editable state."""
     if params.closing_kernel < 1 or params.min_component_area < 1:
@@ -398,6 +406,7 @@ def analyze(
 
 def main(argv: list[str] | None = None) -> int:
     """Run the image-to-volume CLI."""
+    _configure_console_output()
     try:
         args, result, section_mode, all_warnings = analyze(argv)
         _print_result(result, section_mode, all_warnings)
@@ -413,3 +422,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError, cv2.error) as exc:
         print(f"エラー: {exc}", file=sys.stderr)
         return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
