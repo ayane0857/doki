@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 from pottery_scale import (
     ScaleBarCandidate,
     ScaleTextCandidate,
-    has_confident_scale_match,
+    find_confident_scale_match,
 )
 from pottery_volume_cli import AnalysisOutput, AnalysisParams
 from pottery_volume_core import compute_volumes, parse_crop, parse_points, visualize
@@ -201,6 +201,8 @@ class MainWindow(QMainWindow):
         self.pair_generation = 0
         self.scale_labels: list[ScaleTextCandidate] = []
         self.scale_bars: list[ScaleBarCandidate] = []
+        self.scale_applied_label: ScaleTextCandidate | None = None
+        self.scale_applied_bar: ScaleBarCandidate | None = None
         self.scale_detection_path: Path | None = None
         self.current_analysis: AnalysisOutput | None = None
         self._build_ui()
@@ -625,14 +627,14 @@ class MainWindow(QMainWindow):
         self.scale_labels = labels
         self.scale_bars = bars
         self.scale_detection_path = path.resolve()
+        match = find_confident_scale_match(labels, bars)
+        self.scale_applied_label = match[0] if match is not None else None
+        self.scale_applied_bar = match[1] if match is not None else None
         label = labels[0] if labels else None
         bar = bars[0] if bars else None
-        if (
-            label is not None
-            and bar is not None
-            and has_confident_scale_match(labels, bars)
-        ):
-            self.known_mm_edit.setText(f"{label.length_mm:g}")
+        if match is not None:
+            label, bar = match
+            self.known_mm_edit.setText(f"{label.length_mm:.12g}")
             self.bar_px_edit.setText(f"{bar.pixels:.2f}")
             self.scale_mode.setCurrentText("スケール線の px と mm")
             confidence = f"線の信頼度 {bar.confidence:.0%}"
@@ -674,30 +676,78 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            candidate_path = self.scale_detection_path
-            same_image = candidate_path is not None and candidate_path == path.resolve()
-            labels = self.scale_labels if same_image else []
-            bars = self.scale_bars if same_image else []
+            detection_path_snapshot = self.scale_detection_path
+            labels_reference = self.scale_labels
+            bars_reference = self.scale_bars
+            labels_snapshot = tuple(labels_reference)
+            bars_snapshot = tuple(bars_reference)
+            applied_label_snapshot = self.scale_applied_label
+            applied_bar_snapshot = self.scale_applied_bar
+            resolved_path = path.resolve()
+            same_image = (
+                detection_path_snapshot is not None
+                and detection_path_snapshot == resolved_path
+            )
+            labels = labels_reference if same_image else []
+            bars = bars_reference if same_image else []
+            selected_label = self.scale_applied_label if same_image else None
+            selected_bar = self.scale_applied_bar if same_image else None
             try:
                 default_mm = float(self.known_mm_edit.text().strip())
             except ValueError:
                 default_mm = None
-            dialog = ScaleCalibrationDialog(path, labels, bars, default_mm, self)
+            dialog = ScaleCalibrationDialog(
+                path,
+                labels,
+                bars,
+                default_mm,
+                self,
+                selected_label=selected_label,
+                selected_bar=selected_bar,
+            )
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 dialog.deleteLater()
                 return
-            if dialog.mm_per_px is None or dialog.line_pixels is None:
+            detection_state_unchanged = (
+                self.scale_detection_path == detection_path_snapshot
+                and self.scale_labels is labels_reference
+                and self.scale_bars is bars_reference
+                and tuple(self.scale_labels) == labels_snapshot
+                and tuple(self.scale_bars) == bars_snapshot
+                and self.scale_applied_label is applied_label_snapshot
+                and self.scale_applied_bar is applied_bar_snapshot
+            )
+            if not detection_state_unchanged:
                 dialog.deleteLater()
-                raise ValueError("換算値を計算できませんでした。")
+                return
+
+            confirmed_length_mm = dialog.length_mm
             mm_per_px = dialog.mm_per_px
             line_pixels = dialog.line_pixels
+            if mm_per_px is None or line_pixels is None or confirmed_length_mm is None:
+                dialog.deleteLater()
+                raise ValueError("換算値を計算できませんでした。")
+            self.known_mm_edit.setText(f"{confirmed_length_mm:.12g}")
+            if same_image:
+                selected_label = dialog.label_combo.currentData()
+                self.scale_applied_label = (
+                    selected_label
+                    if isinstance(selected_label, ScaleTextCandidate)
+                    else None
+                )
+                selected_bar_index = dialog.bar_combo.currentIndex()
+                self.scale_applied_bar = (
+                    dialog.bars[selected_bar_index]
+                    if 0 <= selected_bar_index < len(dialog.bars)
+                    else None
+                )
             dialog.deleteLater()
             self.scale_generation += 1
             self.direct_edit.setText(f"{mm_per_px:.10g}")
             self.bar_px_edit.setText(f"{line_pixels:.2f}")
             self.scale_mode.setCurrentText("mm/px を直接指定")
             self.status.setText(
-                f"手動確認したスケールを設定しました: {dialog.mm_per_px:.6g} mm/px"
+                f"手動確認したスケールを設定しました: {mm_per_px:.6g} mm/px"
             )
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "目盛りを測定できません", str(exc))
