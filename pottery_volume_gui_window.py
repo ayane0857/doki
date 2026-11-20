@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QKeySequence
+from PySide6.QtCore import QSettings, Qt, QThread, Signal
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -204,6 +204,7 @@ class MainWindow(QMainWindow):
         self.scale_detection_path: Path | None = None
         self.current_analysis: AnalysisOutput | None = None
         self._build_ui()
+        self._build_view_menu()
         if initial:
             self.image_edit.setText(str(initial))
 
@@ -392,6 +393,40 @@ class MainWindow(QMainWindow):
             self.result_copy_buttons.append(button)
         outer.addLayout(action)
         self._update_scale_fields(self.scale_mode.currentText())
+
+    def _build_view_menu(self) -> None:
+        menu = self.menuBar().addMenu("表示")
+        theme_group = QActionGroup(self)
+        app = QApplication.instance()
+        current_theme = (
+            app.property("pottery_theme_mode") if isinstance(app, QApplication) else None
+        ) or "system"
+        self.theme_actions: dict[str, QAction] = {}
+        for theme, label in (
+            ("system", "自動（システム設定）"),
+            ("light", "ライト"),
+            ("dark", "ダーク"),
+        ):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(current_theme == theme)
+            action.triggered.connect(
+                lambda _checked, selected=theme: self._set_theme(selected)
+            )
+            theme_group.addAction(action)
+            menu.addAction(action)
+            self.theme_actions[theme] = action
+        self.dark_mode_action = self.theme_actions["dark"]
+
+    def _set_theme(self, theme: str) -> None:
+        from pottery_volume_gui_style import stylesheet_for_theme
+
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            return
+        app.setProperty("pottery_theme_mode", theme)
+        app.setStyleSheet(stylesheet_for_theme(theme, app))
+        QSettings().setValue("theme_mode", theme)
 
     def _path_row(self, edit: Any, callback: Any, kind: str) -> Any:
         row = QWidget()
