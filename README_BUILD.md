@@ -54,7 +54,10 @@ python -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 同じEXEを `continuous-windows` GitHub Releaseにも添付します。
 GUI版の配布フォルダーは `PotteryVolume-GUI-Windows.zip` と
 `PotteryVolume-GUI-Windows.zip.sha256` にまとめます。これらを
-`https://file.ayane0857.net/app/doki/windows/latest/` にアップロードしてください。
+`https://file.ayane0857.net/app/doki/windows/releases/<commit-sha>/` にアップロードしてください。
+両ファイルのアップロード後、同じサーバーの
+`https://file.ayane0857.net/app/doki/windows/latest/release.txt` に公開する
+`<commit-sha>` を1回更新してください。
 
 GitHub Actionsでは、`FTP_HOST`、`FTP_USERNAME`、`FTP_PASSWORD` を
 リポジトリのActions Secretsへ登録すると、masterへのpushまたは手動実行時に
