@@ -28,6 +28,7 @@ MinVersion=10.0
 CloseApplications=yes
 RestartApplications=no
 AppMutex=Local\PotteryVolumeAppMutex
+SetupMutex=Local\PotteryVolumeSetupMutex
 SetupLogging=yes
 UsePreviousAppDir=yes
 UninstallDisplayName=PotteryVolume
@@ -259,11 +260,22 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ErrorCode: Integer;
+  ErrorText: String;
   AppDirectory: String;
   AppExecutable: String;
 begin
-  if CurStep = ssPostInstall then
-    SwapPreparedPayload;
+  if CurStep = ssInstall then begin
+    try
+      SwapPreparedPayload;
+    except
+      ErrorText := GetExceptionMessage;
+      Log('Payload replacement failed: ' + ErrorText);
+      SuppressibleMsgBox(
+        'PotteryVolume の更新に失敗しました。' + #13#10 + ErrorText,
+        mbError, MB_OK, IDOK);
+      Abort;
+    end;
+  end;
   if (CurStep = ssDone) and IsUpdateMode then begin
     AppDirectory := ExpandConstant('{app}\PotteryVolume_gui');
     AppExecutable := AppDirectory + '\PotteryVolume_gui.exe';
