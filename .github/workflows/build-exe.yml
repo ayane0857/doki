@@ -93,7 +93,7 @@ jobs:
 
       - name: Build EXE
         shell: cmd
-        run: build_exe.bat
+        run: build\build_exe.bat
 
       - name: Install Inno Setup
         shell: pwsh
@@ -103,13 +103,13 @@ jobs:
 
       - name: Build installer
         shell: pwsh
-        run: ./build.ps1
+        run: ./build/build.ps1
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: PotteryVolume-Setup
-          path: dist/PotteryVolume-Setup.exe
+          path: build/dist/PotteryVolume-Setup.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -119,17 +119,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python prepare_payload.py
+          python build/prepare_payload.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $zipHash = (Get-FileHash -Algorithm SHA256 "PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
-          $fields = (Get-Content -Raw -Encoding ascii "PotteryVolume-GUI-Windows.zip.sha256").Trim().Split()
+          $zipHash = (Get-FileHash -Algorithm SHA256 "build/PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
+          $fields = (Get-Content -Raw -Encoding ascii "build/PotteryVolume-GUI-Windows.zip.sha256").Trim().Split()
           if ($fields.Count -eq 0 -or $fields[0] -notmatch '^[0-9a-fA-F]{64}$') {
             throw "Prepared payload checksum metadata is invalid"
           }
           if ($fields[0].ToLowerInvariant() -ne $zipHash) {
             throw "Prepared payload ZIP/checksum mismatch"
           }
-          $setupPath = "dist/PotteryVolume-Setup.exe"
+          $setupPath = "build/dist/PotteryVolume-Setup.exe"
           if (-not (Test-Path -LiteralPath $setupPath)) {
             throw "Built installer is missing: $setupPath"
           }
@@ -211,7 +211,7 @@ jobs:
           } else {
             foreach ($fileName in $releaseFiles) {
               $url = "ftp://${hostName}:${port}${stagingDir}/$fileName"
-              $localPath = if ($fileName.StartsWith("PotteryVolume-GUI-")) { $fileName } else { "dist/$fileName" }
+              $localPath = if ($fileName.StartsWith("PotteryVolume-GUI-")) { "build/$fileName" } else { "build/dist/$fileName" }
               Invoke-Curl @(
                 "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
                 "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
@@ -260,7 +260,7 @@ jobs:
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag `
-              dist/PotteryVolume-Setup.exe `
+              build/dist/PotteryVolume-Setup.exe `
               --title "PotteryVolume Windows Setup" `
               --notes "Japanese per-user installer for PotteryVolume. The GUI checks for updates when started." `
               --target $env:GITHUB_SHA `
@@ -269,7 +269,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             gh release upload $tag `
-              dist/PotteryVolume-Setup.exe `
+              build/dist/PotteryVolume-Setup.exe `
               --clobber `
               --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

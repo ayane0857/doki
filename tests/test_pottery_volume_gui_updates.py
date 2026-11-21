@@ -279,7 +279,7 @@ def test_cancelled_close_does_not_start_verified_setup(
 
 
 def test_installer_replaces_payload_only_in_install_phase_and_guards_relaunch():
-    installer = Path(__file__).parents[1] / "installer" / "PotteryVolume.iss"
+    installer = Path(__file__).parents[1] / "build" / "installer" / "PotteryVolume.iss"
     source = installer.read_text(encoding="utf-8")
 
     assert "if CurStep = ssInstall then begin" in source
@@ -291,8 +291,8 @@ def test_installer_replaces_payload_only_in_install_phase_and_guards_relaunch():
 
 def test_build_passes_resolved_language_file_and_downloads_atomically():
     repo_root = Path(__file__).parents[1]
-    build_script = (repo_root / "build.ps1").read_text(encoding="utf-8")
-    installer = (repo_root / "installer" / "PotteryVolume.iss").read_text(encoding="utf-8")
+    build_script = (repo_root / "build/build.ps1").read_text(encoding="utf-8")
+    installer = (repo_root / "build" / "installer" / "PotteryVolume.iss").read_text(encoding="utf-8")
 
     assert "/DJapaneseLanguageFile=$languageFile" in build_script
     assert "OutFile $temporaryCandidate" in build_script
@@ -302,7 +302,7 @@ def test_build_passes_resolved_language_file_and_downloads_atomically():
 
 def test_profile_editor_uses_retained_analysis_image():
     window_source = (
-        Path(__file__).parents[1] / "pottery_volume_gui_window.py"
+        Path(__file__).parents[1] / "src" / "pottery_volume_gui_window.py"
     ).read_text(encoding="utf-8")
 
     assert "_load_original_image(output.params.input_path)" not in window_source

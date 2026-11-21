@@ -4,9 +4,10 @@ import hashlib
 import zipfile
 from pathlib import Path
 
-SOURCE = Path("dist") / "PotteryVolume_gui"
-ARCHIVE = Path("PotteryVolume-GUI-Windows.zip")
-CHECKSUM = Path("PotteryVolume-GUI-Windows.zip.sha256")
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "build" / "dist" / "PotteryVolume_gui"
+ARCHIVE = ROOT / "build" / "PotteryVolume-GUI-Windows.zip"
+CHECKSUM = ROOT / "build" / "PotteryVolume-GUI-Windows.zip.sha256"
 
 
 def sha256(path: Path) -> str:

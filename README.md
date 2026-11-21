@@ -4,7 +4,7 @@
 
 ## かんたんに使う
 
-Windows では `pottery_volume_gui.pyw`（または `pottery_volume.py`）を実行すると設定画面が開きます。画像を選び、スケール方法や必要な補正値を設定して「計算する」を押してください。
+Windows では `python src/pottery_volume_gui.pyw`（または `python src/pottery_volume.py`）を実行すると設定画面が開きます。画像を選び、スケール方法や必要な補正値を設定して「計算する」を押してください。
 
 画面上部の「表示」メニューから「自動（システム設定）・ライト・ダーク」を選べます。自動ではOSの配色設定に合わせて切り替わり、設定は次回起動時にも引き継がれます。
 
@@ -24,7 +24,7 @@ Windows では `pottery_volume_gui.pyw`（または `pottery_volume.py`）を実
 - 計算後に「輪郭を手動補正」を押すと、元画像に内面・外面の輪郭を重ねて表示します。既存点をドラッグするほか、内面または外面を選んで画像を複数回クリックし、任意の高さに補正点を追加できます。右側の表でも編集でき、点の間は補間して体積を再計算します。半径は px 単位です。
 
 ~~~powershell
-python pottery_volume.py
+python src/pottery_volume.py
 ~~~
 
 画像を CMD にドラッグしてパスを自動入力する方法:
@@ -33,14 +33,14 @@ python pottery_volume.py
 2. 次のように入力し、末尾の空白を残します。
 
 ~~~text
-python pottery_volume.py 
+python src/pottery_volume.py 
 ~~~
 
 3. エクスプローラーから画像ファイルを CMD にドラッグします。画像のパスが入力されます。
 4. 必要なら続けてオプションを入力し、Enter を押します。
 
 ~~~text
-python pottery_volume.py "C:\画像の場所\input.png" --scale-mm-per-px 0.5 --debug-dir out
+python src/pottery_volume.py "C:\画像の場所\input.png" --scale-mm-per-px 0.5 --debug-dir out
 ~~~
 
 スケールを省略すると px 単位で計算します。設定画面では入力欄が用意されているため、コマンドのオプションを覚える必要はありません。
@@ -65,32 +65,32 @@ python -m pip install -r requirements-dev.txt
 
 ## Windows EXE の作成
 
-Windows では `build_exe.bat` でCLI版・GUI版と配布用ペイロードを作成し、`build.ps1` で `dist\PotteryVolume-Setup.exe` をビルドします。セットアップとビルド手順は [README_BUILD.md](./README_BUILD.md) を参照してください。
+Windows では `build\build_exe.bat` でCLI版・GUI版と配布用ペイロードを作成し、`build\build.ps1` で `build\dist\PotteryVolume-Setup.exe` をビルドします。セットアップとビルド手順は [README_BUILD.md](./README_BUILD.md) を参照してください。
 
 セットアップはユーザー単位でGUI本体を直接ダウンロードしてインストールします。GUIは起動時にバックグラウンドで更新を確認し、新版があるときは更新するか選べます。更新設定とスキップした版は「表示」メニューから管理できます。
 
 ~~~text
-dist\PotteryVolume\PotteryVolume.exe
-dist\PotteryVolume_gui\PotteryVolume_gui.exe
+build/dist\PotteryVolume\PotteryVolume.exe
+build/dist\PotteryVolume_gui\PotteryVolume_gui.exe
 ~~~
 
 各配布フォルダーには版ごとの使い方を記した `README.txt` が入ります。ビルド担当者向けの手順は [README_BUILD.md](./README_BUILD.md) を参照してください。
 
 CLI版はコンソールアプリ、GUI版はウィンドウアプリです。GUI版にはランタイムライブラリと OCR モデルが含まれるため、実行先 PC に Python をインストールする必要はありません。
 
-Linux/macOS では `build_exe.sh` を実行すると、同じ設定でアプリフォルダーを作成できます。
+Linux/macOS では `build/build_exe.sh` を実行すると、同じ設定でアプリフォルダーを作成できます。
 スクリプトは共有ライブラリ付きPythonからビルド用のvenvを作成して使用します。
 
 配布フォルダーには `THIRD_PARTY_LICENSES.txt` を同梱します。GUIの
 「ライセンス表記」ボタンからも表示できます。
 
 ~~~bash
-bash build_exe.sh
+bash build/build_exe.sh
 ~~~
 
 ~~~text
-dist/PotteryVolume/PotteryVolume
-dist/PotteryVolume_gui/PotteryVolume_gui
+build/dist/PotteryVolume/PotteryVolume
+build/dist/PotteryVolume_gui/PotteryVolume_gui
 ~~~
 
 GitHub Actions ではコミットごとにWindows版をビルドし、両アプリをZIP形式のArtifactとして保存します。GitHubのActionsから対象の実行結果を開き、Artifactsの `PotteryVolume-Windows-<commit-sha>` をダウンロードしてください。
@@ -98,7 +98,7 @@ GitHub Actions ではコミットごとにWindows版をビルドし、両アプ�
 CLI版はGUIを開かずに画像を処理します。JSON が必要な場合だけ --json-out を指定してください。
 
 ~~~text
-dist\PotteryVolume\PotteryVolume.exe input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
+build\dist\PotteryVolume\PotteryVolume.exe input.png --scale-mm-per-px 0.5 --json-out result.json --debug-dir out
 ~~~
 
 ## 実行
@@ -106,25 +106,25 @@ dist\PotteryVolume\PotteryVolume.exe input.png --scale-mm-per-px 0.5 --json-out 
 mm/px を直接指定する例:
 
 ~~~powershell
-python pottery_volume.py input.png --scale-mm-per-px 0.5 --debug-dir out
+python src/pottery_volume.py input.png --scale-mm-per-px 0.5 --debug-dir out
 ~~~
 
 画像内の既知距離が 100 px = 50 mm の場合:
 
 ~~~powershell
-python pottery_volume.py input.png --scale-bar-px 100 --scale-bar-mm 50 --debug-dir out
+python src/pottery_volume.py input.png --scale-bar-px 100 --scale-bar-mm 50 --debug-dir out
 ~~~
 
 2点の座標から画像上の距離を求める場合:
 
 ~~~powershell
-python pottery_volume.py input.png --scale-points 40,20,140,20 --scale-bar-mm 50
+python src/pottery_volume.py input.png --scale-points 40,20,140,20 --scale-bar-mm 50
 ~~~
 
 器高の実寸からスケールを逆算する場合:
 
 ~~~powershell
-python pottery_volume.py input.png --vessel-height-mm 120
+python src/pottery_volume.py input.png --vessel-height-mm 120
 ~~~
 
 スケールを指定しない場合は警告を出し、長さを px、体積を px³ として出力します。JSON は既定では保存せず、--json-out path.json を指定した場合だけ保存します。スケールを指定した結果には mm³、cm³、mL を出力します（1 cm³ = 1 mL）。
@@ -140,7 +140,7 @@ python pottery_volume.py input.png --vessel-height-mm 120
 自動検出がずれた場合は軸・切り出し・液面を px 単位で指定できます。
 
 ~~~powershell
-python pottery_volume.py input.png --axis-x 135 --crop 135,20,260,240 --liquid-level-y 48
+python src/pottery_volume.py input.png --axis-x 135 --crop 135,20,260,240 --liquid-level-y 48
 ~~~
 
 主なオプション:
@@ -187,11 +187,11 @@ ruff check .
 pyright
 ~~~
 
-2つの `.spec` はどちらもプロジェクトのルートで実行します。`PotteryVolume.spec` はコンソール形式のCLI版 `dist/PotteryVolume/PotteryVolume.exe`、`PotteryVolume_gui.spec` はウィンドウ形式のGUI版 `dist/PotteryVolume_gui/PotteryVolume_gui.exe` を作ります。GUI版はRapidOCRとPySide6のデータ・バイナリ・hidden importを収集します。両方に `THIRD_PARTY_LICENSES.txt` を同梱します。
+`build/` 内の `.spec` はプロジェクトのルートから実行します。`build/PotteryVolume.spec` はコンソール形式のCLI版 `build/dist/PotteryVolume/PotteryVolume.exe`、`build/PotteryVolume_gui.spec` はウィンドウ形式のGUI版 `build/dist/PotteryVolume_gui/PotteryVolume_gui.exe` を作ります。GUI版はRapidOCRとPySide6のデータ・バイナリ・hidden importを収集します。両方に `THIRD_PARTY_LICENSES.txt` を同梱します。
 
 ~~~powershell
-python -m PyInstaller --noconfirm PotteryVolume.spec
-python -m PyInstaller --noconfirm PotteryVolume_gui.spec
+python -m PyInstaller --noconfirm --workpath build/work --distpath build/dist build/PotteryVolume.spec
+python -m PyInstaller --noconfirm --workpath build/work --distpath build/dist build/PotteryVolume_gui.spec
 ~~~
 
-`build_exe.bat` と `build_exe.sh` はCLI版とGUI版の両方を作ります。
+`build/build_exe.bat` と `build/build_exe.sh` はCLI版とGUI版の両方を作ります。

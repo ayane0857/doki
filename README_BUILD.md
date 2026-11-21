@@ -26,22 +26,22 @@ PotteryVolume_gui.exe（PyInstaller onedir）
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-cmd.exe /c build_exe.bat
-.\build.ps1
+cmd.exe /c build\build_exe.bat
+.\build\build.ps1
 ```
 
-`build_exe.bat` は `BUILD_INFO.json` を生成し、CLI版とGUI版をPyInstallerでビルドして、GUIフォルダーをZIP化します。`prepare_payload.py` はZIP内の `PotteryVolume_gui/` 構成を保ち、ZIPとSHA-256メタデータを作成します。`build.ps1` は同じビルド情報を再生成してから `ISCC.exe` を実行します。`AppVersion` は `pyproject.toml` の `project.version` から読みます。コミットは `GITHUB_SHA`、`git rev-parse HEAD`、`dev` の順で決め、GUIに `BUILD_INFO.json` として同梱します。
+`build/build_exe.bat` は `build/BUILD_INFO.json` を生成し、CLI版とGUI版をPyInstallerでビルドして、GUIフォルダーをZIP化します。`build/prepare_payload.py` はZIP内の `PotteryVolume_gui/` 構成を保ち、ZIPとSHA-256メタデータを作成します。`build/build.ps1` は同じビルド情報を再生成してから `ISCC.exe` を実行します。`AppVersion` は `pyproject.toml` の `project.version` から読みます。コミットは `GITHUB_SHA`、`git rev-parse HEAD`、`dev` の順で決め、GUIに `BUILD_INFO.json` として同梱します。
 
 ```powershell
-ISCC.exe /DAppVersion=0.1.0 /DCommitSha=<40桁のコミットSHA> installer\PotteryVolume.iss
+ISCC.exe /DAppVersion=0.1.0 /DCommitSha=<40桁のコミットSHA> build\installer\PotteryVolume.iss
 ```
 
-通常の作業では引数を直接渡す必要はなく、`build.ps1` が値を設定します。出力は次のとおりです。
+通常の作業では引数を直接渡す必要はなく、`build/build.ps1` が値を設定します。出力は次のとおりです。
 
-- CLI: `dist\PotteryVolume\PotteryVolume.exe`
-- GUIフォルダー: `dist\PotteryVolume_gui\`
-- 配布用GUI ZIP: `PotteryVolume-GUI-Windows.zip` と `.sha256`
-- インストーラー: `dist\PotteryVolume-Setup.exe`
+- CLI: `build/dist\PotteryVolume\PotteryVolume.exe`
+- GUIフォルダー: `build/dist\PotteryVolume_gui\`
+- 配布用GUI ZIP: `build/PotteryVolume-GUI-Windows.zip` と `.sha256`
+- インストーラー: `build/dist\PotteryVolume-Setup.exe`
 
 SetupはGUI ZIPを内包しません。Inno Setupのダウンロード機能で `latest/release.txt` とZIPの `.sha256` を取得し、`DownloadTemporaryFile` / `CreateDownloadPage` のSHA-256検証付きダウンロードを行います。インストール先の staging に展開してから `{app}\PotteryVolume_gui` に入れ替えます。入れ替えに失敗したときはバックアップから復元します。
 
