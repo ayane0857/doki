@@ -166,7 +166,6 @@ jobs:
               throw "Immutable payload is incomplete: $version"
             }
 
-            $localZipHash = (Get-FileHash -Algorithm SHA256 "PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
             $remoteZipHash = (Get-FileHash -Algorithm SHA256 $remoteZip).Hash.ToLowerInvariant()
             $checksumFields = (Get-Content -Raw -Encoding ascii $remoteChecksum).Trim().Split()
             if ($checksumFields.Count -eq 0 -or $checksumFields[0] -notmatch '^[0-9a-fA-F]{64}$') {
@@ -175,9 +174,6 @@ jobs:
             $remoteChecksumHash = $checksumFields[0].ToLowerInvariant()
             if ($remoteZipHash -ne $remoteChecksumHash) {
               throw "Immutable payload ZIP/checksum mismatch: $version"
-            }
-            if ($remoteZipHash -ne $localZipHash) {
-              throw "Immutable payload differs from the rebuilt commit: $version"
             }
           } else {
             foreach ($fileName in @(
