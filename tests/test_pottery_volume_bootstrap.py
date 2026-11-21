@@ -137,6 +137,19 @@ def test_write_release_record_is_atomic(tmp_path):
     assert not (root / (pottery_volume_bootstrap.LAST_RELEASE_NAME + ".tmp")).exists()
 
 
+def test_cache_root_uses_saved_install_location(monkeypatch, tmp_path):
+    base_root = tmp_path / "base"
+    base_root.mkdir()
+    install_root = tmp_path / "chosen"
+    (base_root / pottery_volume_bootstrap.INSTALL_LOCATION_NAME).write_text(
+        str(install_root),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pottery_volume_bootstrap, "default_cache_root", lambda: base_root)
+
+    assert pottery_volume_bootstrap.cache_root() == install_root
+
+
 def test_invalid_cached_payload_is_not_recorded(monkeypatch, tmp_path):
     version = "0123456789abcdef0123456789abcdef01234567"
     record = tmp_path / pottery_volume_bootstrap.LAST_RELEASE_NAME

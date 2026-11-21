@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import queue
 import urllib.error
 import urllib.request
 import zipfile
@@ -16,6 +18,7 @@ PAYLOAD_BASE_URL = "https://file.ayane0857.net/app/doki/windows"
 PAYLOAD_ZIP_NAME = "PotteryVolume-GUI-Windows.zip"
 PAYLOAD_VERSION_NAME = "BOOTSTRAP_VERSION"
 LAST_RELEASE_NAME = ".last-successful-release"
+INSTALL_LOCATION_NAME = "install-location.txt"
 
 
 def _resource_path(name: str) -> Path:
@@ -31,10 +34,62 @@ def payload_version() -> str:
 
 
 def cache_root() -> Path:
+    base_root = default_cache_root()
+    install_location = base_root / INSTALL_LOCATION_NAME
+    try:
+        configured = install_location.read_text(encoding="utf-8").strip()
+        if configured:
+            return Path(configured).expanduser()
+    except (OSError, UnicodeDecodeError):
+        pass
+    return base_root
+
+
+def default_cache_root() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         return Path(local_app_data) / "PotteryVolume"
     return Path.home() / ".cache" / "PotteryVolume"
+
+
+def ensure_install_location() -> Path:
+    base_root = default_cache_root()
+    base_root.mkdir(parents=True, exist_ok=True)
+    install_location = base_root / INSTALL_LOCATION_NAME
+
+    try:
+        configured = install_location.read_text(encoding="utf-8").strip()
+        if configured:
+            return Path(configured).expanduser()
+    except (OSError, UnicodeDecodeError):
+        pass
+
+    if sys.platform != "win32":
+        return base_root
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            parent=root,
+            initialdir=str(base_root),
+            title="PotteryVolume のインストール先を選択",
+        )
+        root.destroy()
+    except (ImportError, tk.TclError):
+        return base_root
+
+    install_root = Path(selected).expanduser() if selected else base_root
+    install_root.mkdir(parents=True, exist_ok=True)
+    try:
+        install_location.write_text(str(install_root), encoding="utf-8")
+    except OSError:
+        pass
+    return install_root
 
 
 @contextmanager
@@ -193,6 +248,66 @@ def show_error(message: str) -> None:
         print(message, file=sys.stderr)
 
 
+def prepare_payload_with_loading_window() -> Path:
+    if sys.platform != "win32":
+        return prepare_payload()
+
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except ImportError:
+        return prepare_payload()
+
+    try:
+        root = tk.Tk()
+        root.title("PotteryVolume")
+        root.resizable(False, False)
+        root.geometry("360x110")
+        root.attributes("-topmost", True)
+
+        frame = ttk.Frame(root, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="アプリケーションを準備しています...",
+            anchor="center",
+        ).pack(fill="x", pady=(0, 12))
+        progress = ttk.Progressbar(frame, mode="indeterminate", length=300)
+        progress.pack()
+        progress.start(10)
+    except tk.TclError:
+        return prepare_payload()
+
+    outcome: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def prepare() -> None:
+        try:
+            outcome.put((True, prepare_payload()))
+        except (OSError, RuntimeError, urllib.error.URLError, zipfile.BadZipFile) as error:
+            outcome.put((False, error))
+
+    worker = threading.Thread(target=prepare, daemon=True)
+    worker.start()
+
+    result = None
+    while worker.is_alive():
+        root.update()
+        worker.join(timeout=0.05)
+
+    if not outcome.empty():
+        succeeded, result = outcome.get()
+        if not succeeded:
+            root.destroy()
+            if isinstance(result, Exception):
+                raise result
+            raise RuntimeError("アプリケーションの準備中にエラーが発生しました。")
+
+    root.destroy()
+    if not isinstance(result, Path):
+        raise RuntimeError("ダウンロードされたアプリの準備に失敗しました。")
+    return result
+
+
 def prepare_payload() -> Path:
     version = payload_version()
     root = cache_root()
@@ -252,7 +367,9 @@ def prepare_payload() -> Path:
 
 def main() -> int:
     try:
-        executable = prepare_payload()
+        if sys.platform == "win32":
+            ensure_install_location()
+        executable = prepare_payload_with_loading_window()
         caller_cwd = Path.cwd()
         normalized = normalize_forwarded_arguments(sys.argv[1:], caller_cwd)
         subprocess.Popen([str(executable), *normalized], cwd=str(executable.parent))
