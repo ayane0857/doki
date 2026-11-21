@@ -1,4 +1,4 @@
-name: Test and Build Windows EXE
+name: Test and Build PotteryVolume Setup
 
 on:
   pull_request:
@@ -94,6 +94,33 @@ jobs:
       - name: Build EXE
         shell: cmd
         run: build_exe.bat
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $compilerPaths = @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $compilerFound = (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -or
+            ($compilerPaths | Where-Object { Test-Path -LiteralPath $_ })
+          if (-not $compilerFound) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PotteryVolume-Setup
+          path: dist/PotteryVolume-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prepare online payload
         id: prepare-payload
@@ -217,7 +244,7 @@ jobs:
             "ftp://${hostName}:${port}/"
           )
 
-      - name: Publish bootstrap files to GitHub Release
+      - name: Publish installer to GitHub Release
         if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
         shell: pwsh
         env:
@@ -227,18 +254,16 @@ jobs:
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag `
-              dist/PotteryVolume_bootstrap.exe `
-              pottery_volume_bootstrap.py `
-              --title "PotteryVolume Windows (bootstrap)" `
-              --notes "Bootstrap downloads and launches the application from the configured FTP server. pottery_volume_bootstrap.py is also available as a Python downloader." `
+              dist/PotteryVolume-Setup.exe `
+              --title "PotteryVolume Windows Setup" `
+              --notes "Japanese per-user installer for PotteryVolume. The installed launcher checks for updates when started." `
               --target $env:GITHUB_SHA `
               --prerelease `
               --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             gh release upload $tag `
-              dist/PotteryVolume_bootstrap.exe `
-              pottery_volume_bootstrap.py `
+              dist/PotteryVolume-Setup.exe `
               --clobber `
               --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

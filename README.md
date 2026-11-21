@@ -65,9 +65,9 @@ python -m pip install -r requirements-dev.txt
 
 ## Windows EXE の作成
 
-Windows では `build_exe.bat` を実行すると、通常版に加えて小さいブートストラップ版も作成します。
-配布用の通常版は各EXEと `_internal` フォルダーを一緒に配置してください。
-ブートストラップ版は初回起動時にファイルサーバーから通常版を `%LOCALAPPDATA%\PotteryVolume` にダウンロードします。
+Windows では `build_exe.bat` でCLI版・GUI版と配布用ペイロードを作成し、`build.ps1` で `dist\PotteryVolume-Setup.exe` をビルドします。セットアップとビルド手順は [README_BUILD.md](./README_BUILD.md) を参照してください。
+
+セットアップはユーザー単位でインストールし、インストール後と起動時に最新のGUIペイロードを確認します。ランチャーはネットワークに接続できない場合、最後に正常に準備できた版を起動します。
 
 ~~~text
 dist\PotteryVolume\PotteryVolume.exe
