@@ -6,6 +6,9 @@
 #ifndef CommitSha
   #error CommitSha must be supplied by build.ps1
 #endif
+#ifndef JapaneseLanguageFile
+  #error JapaneseLanguageFile must be supplied by build.ps1
+#endif
 
 #define PayloadBaseUrl "https://file.ayane0857.net/app/doki/windows"
 
@@ -41,7 +44,7 @@ WizardStyle=modern
 ArchiveExtraction=full
 
 [Languages]
-Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
+Name: "japanese"; MessagesFile: "{#JapaneseLanguageFile}"
 
 [Tasks]
 Name: "desktopicon"; Description: "デスクトップにアイコンを作成する"; GroupDescription: "追加アイコン:"; Flags: checkedonce
@@ -266,7 +269,7 @@ var
   AppDirectory: String;
   AppExecutable: String;
 begin
-  if CurStep = ssPostInstall then begin
+  if CurStep = ssInstall then begin
     PayloadReplaced := False;
     try
       if not SwapPreparedPayload then

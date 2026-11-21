@@ -278,15 +278,35 @@ def test_cancelled_close_does_not_start_verified_setup(
     assert not installer_directory.exists()
 
 
-def test_installer_replaces_payload_only_in_post_install_and_guards_relaunch():
+def test_installer_replaces_payload_only_in_install_phase_and_guards_relaunch():
     installer = Path(__file__).parents[1] / "installer" / "PotteryVolume.iss"
     source = installer.read_text(encoding="utf-8")
 
-    assert "if CurStep = ssPostInstall then begin" in source
-    assert "if CurStep = ssInstall then begin" not in source
+    assert "if CurStep = ssInstall then begin" in source
+    assert "if CurStep = ssPostInstall then begin" not in source
     assert "PayloadReplaced := False;" in source
     assert "PayloadReplaced := True;" in source
     assert "(CurStep = ssDone) and IsUpdateMode and PayloadReplaced" in source
+
+
+def test_build_passes_resolved_language_file_and_downloads_atomically():
+    repo_root = Path(__file__).parents[1]
+    build_script = (repo_root / "build.ps1").read_text(encoding="utf-8")
+    installer = (repo_root / "installer" / "PotteryVolume.iss").read_text(encoding="utf-8")
+
+    assert "/DJapaneseLanguageFile=$languageFile" in build_script
+    assert "OutFile $temporaryCandidate" in build_script
+    assert "Move-Item -LiteralPath $temporaryCandidate -Destination $candidate -Force" in build_script
+    assert 'MessagesFile: "{#JapaneseLanguageFile}"' in installer
+
+
+def test_profile_editor_uses_retained_analysis_image():
+    window_source = (
+        Path(__file__).parents[1] / "pottery_volume_gui_window.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_load_original_image(output.params.input_path)" not in window_source
+    assert "original_image=output.image" in window_source
 
 
 def test_source_execution_skips_startup_update_check(monkeypatch, qt_widget):

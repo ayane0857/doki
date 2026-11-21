@@ -12,7 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
-import cv2
 import numpy as np
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
@@ -73,15 +72,6 @@ from pottery_volume_gui_workers import (
 from pottery_volume_updater import update_available
 
 logger = logging.getLogger(__name__)
-
-
-def _load_original_image(path: Path) -> np.ndarray | None:
-    """入力ファイルをそのまま読み直す（日本語パスでも読めるよう imdecode を使う）。"""
-    try:
-        data = np.fromfile(str(path), dtype=np.uint8)
-        return cv2.imdecode(data, cv2.IMREAD_COLOR)
-    except (OSError, cv2.error):
-        return None
 
 
 IMAGE_FILTERS = (
@@ -1373,7 +1363,7 @@ class MainWindow(QMainWindow):
             output.image,
             float(output.result["axis_x_px"]),
             self,
-            original_image=_load_original_image(output.params.input_path),
+            original_image=output.image,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             dialog.deleteLater()

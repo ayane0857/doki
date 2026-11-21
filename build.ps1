@@ -62,7 +62,15 @@ if (-not (Test-Path -LiteralPath $languageFile)) {
             $candidate = Join-Path $languageDirectory "Japanese.isl"
             try {
                 New-Item -ItemType Directory -Force -Path $languageDirectory | Out-Null
-                Invoke-WebRequest -UseBasicParsing -Uri $officialLanguageUrl -OutFile $candidate
+                $temporaryCandidate = "$candidate.download"
+                Remove-Item -LiteralPath $temporaryCandidate -Force -ErrorAction SilentlyContinue
+                try {
+                    Invoke-WebRequest -UseBasicParsing -Uri $officialLanguageUrl -OutFile $temporaryCandidate
+                    Move-Item -LiteralPath $temporaryCandidate -Destination $candidate -Force
+                } catch {
+                    Remove-Item -LiteralPath $temporaryCandidate -Force -ErrorAction SilentlyContinue
+                    throw
+                }
                 if (Test-Path -LiteralPath $candidate) {
                     $languageFile = $candidate
                     break
@@ -80,7 +88,7 @@ if (-not (Test-Path -LiteralPath $languageFile)) {
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 $scriptPath = Join-Path $repoRoot "installer\PotteryVolume.iss"
-& $iscc "/DAppVersion=$($buildInfo.version)" "/DCommitSha=$($buildInfo.commit)" $scriptPath
+& $iscc "/DAppVersion=$($buildInfo.version)" "/DCommitSha=$($buildInfo.commit)" "/DJapaneseLanguageFile=$languageFile" $scriptPath
 if ($LASTEXITCODE -ne 0) {
     throw "ISCC.exe failed with exit code $LASTEXITCODE."
 }
