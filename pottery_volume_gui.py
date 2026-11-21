@@ -176,7 +176,8 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     log_path = _configure_logging()
     sys.excepthook = _logging_excepthook
 
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+    from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
     instance = QApplication.instance()
     app = instance if isinstance(instance, QApplication) else QApplication(sys.argv)
@@ -184,10 +185,9 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
 
-    from PySide6.QtCore import QSettings, QTimer
+    from PySide6.QtCore import QSettings, QTimer, Qt
 
     from pottery_volume_gui_style import stylesheet_for_theme
-    from pottery_volume_gui_window import MainWindow
 
     app.setStyle("Fusion")
     settings = QSettings()
@@ -209,6 +209,30 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
 
     apply_theme()
     app.styleHints().colorSchemeChanged.connect(apply_theme)
+
+    splash_pixmap = QPixmap(520, 260)
+    splash_pixmap.fill(QColor("#1f2937"))
+    painter = QPainter(splash_pixmap)
+    painter.setPen(QColor("#f9fafb"))
+    title_font = QFont()
+    title_font.setPointSize(22)
+    title_font.setBold(True)
+    painter.setFont(title_font)
+    painter.drawText(32, 92, "PotteryVolume")
+    subtitle_font = QFont()
+    subtitle_font.setPointSize(11)
+    painter.setFont(subtitle_font)
+    painter.setPen(QColor("#d1d5db"))
+    painter.drawText(34, 128, "土器体積・容量推定")
+    painter.drawText(34, 204, "起動しています…")
+    painter.end()
+    splash = QSplashScreen(splash_pixmap)
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+    splash.show()
+    app.processEvents()
+
+    from pottery_volume_gui_window import MainWindow
+
     build_version, build_commit = _read_build_info()
     window = MainWindow(
         initial_image,
@@ -216,6 +240,7 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
         build_commit=build_commit,
     )
     window.show()
+    splash.finish(window)
     QTimer.singleShot(0, window.check_updates_on_startup)
     return app.exec()
 
