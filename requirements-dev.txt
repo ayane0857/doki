@@ -3,4 +3,4 @@ pytest==9.2.0
 pyinstaller==6.22.3
 ruff>=0.12,<1
 pyright>=1.1.400,<2
-mypy>=1.10,<2
+mypy>=2.4,<3
