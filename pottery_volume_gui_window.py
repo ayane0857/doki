@@ -12,7 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
-import numpy as np
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
