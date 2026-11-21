@@ -185,7 +185,7 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
 
-    from PySide6.QtCore import QSettings, QTimer, Qt
+    from PySide6.QtCore import QSettings, Qt, QTimer
 
     from pottery_volume_gui_style import stylesheet_for_theme
 
