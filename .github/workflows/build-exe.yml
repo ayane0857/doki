@@ -202,13 +202,13 @@ jobs:
           }
 
       - name: Publish bootstrap files to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
+        if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = $env:GITHUB_REF_NAME
-          gh release view $tag *> $null
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag `
               dist/PotteryVolume_bootstrap.exe `
@@ -216,12 +216,14 @@ jobs:
               --title "PotteryVolume Windows (bootstrap)" `
               --notes "Bootstrap downloads and launches the application from the configured FTP server. pottery_volume_bootstrap.py is also available as a Python downloader." `
               --target $env:GITHUB_SHA `
-              --prerelease
+              --prerelease `
+              --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             gh release upload $tag `
               dist/PotteryVolume_bootstrap.exe `
               pottery_volume_bootstrap.py `
-              --clobber
+              --clobber `
+              --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
