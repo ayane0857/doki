@@ -92,6 +92,60 @@ def ensure_install_location() -> Path:
     return install_root
 
 
+def create_installer_shortcuts(executable: Path) -> None:
+    if sys.platform != "win32":
+        return
+
+    desktop = os.environ.get("USERPROFILE")
+    if desktop:
+        desktop_shortcut = Path(desktop) / "Desktop" / "PotteryVolume.lnk"
+        start_menu = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        start_menu.mkdir(parents=True, exist_ok=True)
+        start_shortcut = start_menu / "PotteryVolume.lnk"
+
+        escaped = str(executable).replace("'", "''")
+        for shortcut in (desktop_shortcut, start_shortcut):
+            try:
+                shortcut.parent.mkdir(parents=True, exist_ok=True)
+                destination = str(shortcut).replace("'", "''")
+                script = (
+                    "$shell = New-Object -ComObject WScript.Shell; "
+                    f"$shortcut = $shell.CreateShortcut('{destination}'); "
+                    f"$shortcut.TargetPath = '{escaped}'; "
+                    "$shortcut.WorkingDirectory = [System.IO.Path]::GetDirectoryName($shortcut.TargetPath); "
+                    "$shortcut.Save()"
+                )
+                subprocess.run(
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        script,
+                        str(executable),
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+def install_downloaded_payload(executable: Path, install_root: Path) -> Path:
+    source_payload = executable.parents[1]
+    source_gui = source_payload / "PotteryVolume_gui"
+    destination_gui = install_root / "PotteryVolume_gui"
+    destination_gui.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_gui, destination_gui, dirs_exist_ok=True)
+    installed = destination_gui / executable.name
+    if not installed.is_file():
+        raise RuntimeError("インストール先にアプリケーションのEXEを作成できませんでした。")
+    return installed
+
+
 @contextmanager
 def preparation_lock(root: Path):
     root.mkdir(parents=True, exist_ok=True)
@@ -308,6 +362,116 @@ def prepare_payload_with_loading_window() -> Path:
     return result
 
 
+def run_installer() -> int:
+    base_root = default_cache_root()
+    install_location = base_root / INSTALL_LOCATION_NAME
+    try:
+        configured = install_location.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        configured = ""
+    if configured:
+        executable = prepare_payload_with_loading_window()
+        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
+        return 0
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, ttk
+    except ImportError:
+        ensure_install_location()
+        executable = prepare_payload_with_loading_window()
+        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
+        return 0
+
+    try:
+        root = tk.Tk()
+        root.title("PotteryVolume セットアップ")
+        root.resizable(False, False)
+        root.geometry("520x210")
+        root.attributes("-topmost", True)
+    except tk.TclError:
+        ensure_install_location()
+        executable = prepare_payload_with_loading_window()
+        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
+        return 0
+
+    frame = ttk.Frame(root, padding=20)
+    frame.pack(fill="both", expand=True)
+    ttk.Label(frame, text="インストール先").pack(anchor="w")
+
+    location_row = ttk.Frame(frame)
+    location_row.pack(fill="x", pady=(6, 12))
+    location = tk.StringVar(
+        value=str(Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Programs" / "PotteryVolume")
+    )
+    ttk.Entry(location_row, textvariable=location).pack(side="left", fill="x", expand=True)
+
+    def browse() -> None:
+        selected = filedialog.askdirectory(
+            initialdir=location.get(),
+            title="PotteryVolume のインストール先",
+        )
+        if selected:
+            location.set(selected)
+
+    ttk.Button(location_row, text="参照...", command=browse, width=10).pack(side="right", padx=(8, 0))
+
+    launch_at_end = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        frame,
+        text="インストール後にPotteryVolumeを起動する",
+        variable=launch_at_end,
+    ).pack(anchor="w")
+
+    status = tk.StringVar(value="")
+    status_label = ttk.Label(frame, textvariable=status)
+    status_label.pack(fill="x", pady=(10, 4))
+    progress = ttk.Progressbar(frame, mode="indeterminate")
+    progress.pack(fill="x")
+
+    outcome: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def install() -> None:
+        install_root = Path(location.get()).expanduser()
+        install_button.configure(state="disabled")
+        status.set("インストール準備中...")
+        progress.start(10)
+        try:
+            install_root.mkdir(parents=True, exist_ok=True)
+            base_root.mkdir(parents=True, exist_ok=True)
+            install_location.write_text(str(install_root), encoding="utf-8")
+            cached_executable = prepare_payload()
+            installed_executable = install_downloaded_payload(cached_executable, install_root)
+            create_installer_shortcuts(installed_executable)
+            outcome.put((True, installed_executable))
+        except (OSError, RuntimeError, urllib.error.URLError, zipfile.BadZipFile) as error:
+            outcome.put((False, error))
+
+    def poll() -> None:
+        if outcome.empty():
+            root.after(100, poll)
+            return
+        succeeded, result = outcome.get()
+        progress.stop()
+        if succeeded and isinstance(result, Path):
+            status.set("インストールが完了しました。")
+            if launch_at_end.get():
+                subprocess.Popen([str(result), *sys.argv[1:]], cwd=str(result.parent))
+            root.after(500, root.destroy)
+        else:
+            install_button.configure(state="normal")
+            if isinstance(result, Exception):
+                status.set(str(result))
+            else:
+                status.set("インストールに失敗しました。")
+
+    install_button = ttk.Button(frame, text="インストール", command=lambda: threading.Thread(target=install, daemon=True).start())
+    install_button.pack(pady=(12, 0))
+    root.after(100, poll)
+    root.mainloop()
+    return 0
+
+
 def prepare_payload() -> Path:
     version = payload_version()
     root = cache_root()
@@ -368,7 +532,7 @@ def prepare_payload() -> Path:
 def main() -> int:
     try:
         if sys.platform == "win32":
-            ensure_install_location()
+            return run_installer()
         executable = prepare_payload_with_loading_window()
         caller_cwd = Path.cwd()
         normalized = normalize_forwarded_arguments(sys.argv[1:], caller_cwd)

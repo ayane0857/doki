@@ -150,6 +150,23 @@ def test_cache_root_uses_saved_install_location(monkeypatch, tmp_path):
     assert pottery_volume_bootstrap.cache_root() == install_root
 
 
+def test_install_downloaded_payload_copies_gui(tmp_path):
+    source_root = tmp_path / "cache" / "payload" / ("0" * 40)
+    source_gui = source_root / "PotteryVolume_gui"
+    source_gui.mkdir(parents=True)
+    executable = source_gui / "PotteryVolume_gui.exe"
+    executable.write_text("ready", encoding="utf-8")
+
+    install_root = tmp_path / "Program Files" / "PotteryVolume"
+    installed = pottery_volume_bootstrap.install_downloaded_payload(
+        executable,
+        install_root,
+    )
+
+    assert installed == install_root / "PotteryVolume_gui" / "PotteryVolume_gui.exe"
+    assert installed.is_file()
+
+
 def test_invalid_cached_payload_is_not_recorded(monkeypatch, tmp_path):
     version = "0123456789abcdef0123456789abcdef01234567"
     record = tmp_path / pottery_volume_bootstrap.LAST_RELEASE_NAME
