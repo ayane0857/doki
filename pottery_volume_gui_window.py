@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
+import cv2
+import numpy as np
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
@@ -71,6 +73,16 @@ from pottery_volume_gui_workers import (
 from pottery_volume_updater import update_available
 
 logger = logging.getLogger(__name__)
+
+
+def _load_original_image(path: Path) -> np.ndarray | None:
+    """入力ファイルをそのまま読み直す（日本語パスでも読めるよう imdecode を使う）。"""
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except (OSError, cv2.error):
+        return None
+
 
 IMAGE_FILTERS = (
     "\u753b\u50cf\u30d5\u30a1\u30a4\u30eb (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;"
@@ -231,9 +243,9 @@ class MainWindow(QMainWindow):
         self.scale_applied_label: ScaleTextCandidate | None = None
         self.scale_applied_bar: ScaleBarCandidate | None = None
         self.scale_applied_path: Path | None = None
-        self.scale_applied_points: tuple[
-            tuple[float, float], tuple[float, float]
-        ] | None = None
+        self.scale_applied_points: (
+            tuple[tuple[float, float], tuple[float, float]] | None
+        ) = None
         self.scale_detection_path: Path | None = None
         self.current_analysis: AnalysisOutput | None = None
         self._build_ui()
@@ -432,7 +444,9 @@ class MainWindow(QMainWindow):
         theme_group = QActionGroup(self)
         app = QApplication.instance()
         current_theme = (
-            app.property("pottery_theme_mode") if isinstance(app, QApplication) else None
+            app.property("pottery_theme_mode")
+            if isinstance(app, QApplication)
+            else None
         ) or "system"
         self.theme_actions: dict[str, QAction] = {}
         for theme, label in (
@@ -460,9 +474,7 @@ class MainWindow(QMainWindow):
             bool(self._settings.value("check_updates_on_startup", True, type=bool))
         )
         self.automatic_updates_action.toggled.connect(
-            lambda checked: self._settings.setValue(
-                "check_updates_on_startup", checked
-            )
+            lambda checked: self._settings.setValue("check_updates_on_startup", checked)
         )
         menu.addAction(self.automatic_updates_action)
 
@@ -499,9 +511,7 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(self._update_check_finished)
         worker.failed.connect(self._update_check_failed)
-        worker.finished.connect(
-            thread.quit, Qt.ConnectionType.DirectConnection
-        )
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         worker.failed.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         thread.finished.connect(self._clear_update_check_worker)
         thread.finished.connect(worker.deleteLater)
@@ -520,11 +530,11 @@ class MainWindow(QMainWindow):
         manual = self._update_check_manual
         if not update_available(self.build_commit, latest_commit):
             if manual:
-                QMessageBox.information(self, "更新を確認", "PotteryVolume は最新です。")
+                QMessageBox.information(
+                    self, "更新を確認", "PotteryVolume は最新です。"
+                )
             return
-        skipped = cast(
-            str, self._settings.value("skipped_update_commit", "", type=str)
-        )
+        skipped = cast(str, self._settings.value("skipped_update_commit", "", type=str))
         if not manual and skipped.lower() == latest_commit.lower():
             return
         self._show_update_available(latest_commit)
@@ -1363,6 +1373,7 @@ class MainWindow(QMainWindow):
             output.image,
             float(output.result["axis_x_px"]),
             self,
+            original_image=_load_original_image(output.params.input_path),
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             dialog.deleteLater()
