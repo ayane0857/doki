@@ -36,7 +36,46 @@ if (-not $iscc) {
 $isccDirectory = Split-Path -Parent $iscc
 $languageFile = Join-Path $isccDirectory "Languages\Japanese.isl"
 if (-not (Test-Path -LiteralPath $languageFile)) {
-    throw "Japanese.isl がありません。Inno Setup 6.5.0 以降をインストールしてください。"
+    $languageDirectories = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6"),
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6"),
+        $isccDirectory
+    ) | Where-Object { $_ } | Select-Object -Unique
+
+    $languageFile = $null
+    foreach ($directory in $languageDirectories) {
+        $candidate = Join-Path $directory "Languages\Japanese.isl"
+        if (Test-Path -LiteralPath $candidate) {
+            $languageFile = $candidate
+            break
+        }
+    }
+
+    if (-not $languageFile) {
+        $officialLanguageUrl = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Japanese.isl"
+        foreach ($directory in $languageDirectories) {
+            if (-not (Test-Path -LiteralPath (Join-Path $directory "ISCC.exe"))) {
+                continue
+            }
+            $languageDirectory = Join-Path $directory "Languages"
+            $candidate = Join-Path $languageDirectory "Japanese.isl"
+            try {
+                New-Item -ItemType Directory -Force -Path $languageDirectory | Out-Null
+                Invoke-WebRequest -UseBasicParsing -Uri $officialLanguageUrl -OutFile $candidate
+                if (Test-Path -LiteralPath $candidate) {
+                    $languageFile = $candidate
+                    break
+                }
+            } catch {
+                Write-Warning "Japanese.isl を $candidate に保存できませんでした: $_"
+            }
+        }
+    }
+
+    if (-not $languageFile) {
+        throw "Japanese.isl を取得できません。Inno Setup 6.5.0 以降をインストールしてください。"
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null

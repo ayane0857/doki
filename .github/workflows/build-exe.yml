@@ -98,17 +98,8 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: |
-          $compilerPaths = @(
-            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
-            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $compilerFound = (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -or
-            ($compilerPaths | Where-Object { Test-Path -LiteralPath $_ })
-          if (-not $compilerFound) {
-            choco install innosetup --yes --no-progress
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          choco upgrade innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build installer
         shell: pwsh
