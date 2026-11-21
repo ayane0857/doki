@@ -67,7 +67,7 @@ python -m pip install -r requirements-dev.txt
 
 Windows では `build_exe.bat` でCLI版・GUI版と配布用ペイロードを作成し、`build.ps1` で `dist\PotteryVolume-Setup.exe` をビルドします。セットアップとビルド手順は [README_BUILD.md](./README_BUILD.md) を参照してください。
 
-セットアップはユーザー単位でインストールし、インストール後と起動時に最新のGUIペイロードを確認します。ランチャーはネットワークに接続できない場合、最後に正常に準備できた版を起動します。
+セットアップはユーザー単位でGUI本体を直接ダウンロードしてインストールします。GUIは起動時にバックグラウンドで更新を確認し、新版があるときは更新するか選べます。更新設定とスキップした版は「表示」メニューから管理できます。
 
 ~~~text
 dist\PotteryVolume\PotteryVolume.exe

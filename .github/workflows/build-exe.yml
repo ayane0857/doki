@@ -128,7 +128,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python prepare_bootstrap_payload.py
+          python prepare_payload.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $zipHash = (Get-FileHash -Algorithm SHA256 "PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
           $fields = (Get-Content -Raw -Encoding ascii "PotteryVolume-GUI-Windows.zip.sha256").Trim().Split()
@@ -138,6 +138,12 @@ jobs:
           if ($fields[0].ToLowerInvariant() -ne $zipHash) {
             throw "Prepared payload ZIP/checksum mismatch"
           }
+          $setupPath = "dist/PotteryVolume-Setup.exe"
+          if (-not (Test-Path -LiteralPath $setupPath)) {
+            throw "Built installer is missing: $setupPath"
+          }
+          $setupHash = (Get-FileHash -Algorithm SHA256 $setupPath).Hash.ToLowerInvariant()
+          Set-Content -Path "$setupPath.sha256" -Value "$setupHash  PotteryVolume-Setup.exe" -NoNewline -Encoding ascii
 
       - name: Upload online payload by FTP
         id: publish-payload
@@ -178,41 +184,48 @@ jobs:
           $pointerUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/release.txt"
           $credentials = "$($env:FTP_USERNAME):$($env:FTP_PASSWORD)"
 
-          $remoteZip = Join-Path $env:RUNNER_TEMP "remote-$version.zip"
-          $remoteChecksum = Join-Path $env:RUNNER_TEMP "remote-$version.zip.sha256"
-          $remoteZipUrl = "ftp://${hostName}:${port}${releaseDir}/PotteryVolume-GUI-Windows.zip"
-          $remoteChecksumUrl = "ftp://${hostName}:${port}${releaseDir}/PotteryVolume-GUI-Windows.zip.sha256"
+          $releaseFiles = @(
+            "PotteryVolume-GUI-Windows.zip",
+            "PotteryVolume-GUI-Windows.zip.sha256",
+            "PotteryVolume-Setup.exe",
+            "PotteryVolume-Setup.exe.sha256"
+          )
+          $remoteFiles = @{}
+          $anyRemoteFileExists = $false
+          foreach ($fileName in $releaseFiles) {
+            $remoteFile = Join-Path $env:RUNNER_TEMP "remote-$version-$fileName"
+            $remoteUrl = "ftp://${hostName}:${port}${releaseDir}/$fileName"
+            & curl.exe --fail --silent --show-error --ssl-reqd --ftp-pasv --retry 5 --retry-delay 10 --retry-all-errors --keepalive-time 30 --user $credentials --output $remoteFile $remoteUrl *> $null
+            $remoteFiles[$fileName] = @{ path = $remoteFile; exists = ($LASTEXITCODE -eq 0) }
+            $anyRemoteFileExists = $anyRemoteFileExists -or $remoteFiles[$fileName].exists
+          }
 
-          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-pasv --retry 5 --retry-delay 10 --retry-all-errors --keepalive-time 30 --user $credentials --output $remoteZip $remoteZipUrl *> $null
-          $remoteZipExists = $LASTEXITCODE -eq 0
-          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-pasv --retry 5 --retry-delay 10 --retry-all-errors --keepalive-time 30 --user $credentials --output $remoteChecksum $remoteChecksumUrl *> $null
-          $remoteChecksumExists = $LASTEXITCODE -eq 0
-
-          if ($remoteZipExists -or $remoteChecksumExists) {
-            if (-not $remoteZipExists -or -not $remoteChecksumExists) {
-              throw "Immutable payload is incomplete: $version"
+          if ($anyRemoteFileExists) {
+            foreach ($fileName in $releaseFiles) {
+              if (-not $remoteFiles[$fileName].exists) {
+                throw "Immutable release is incomplete: $version ($fileName)"
+              }
             }
-
-            $remoteZipHash = (Get-FileHash -Algorithm SHA256 $remoteZip).Hash.ToLowerInvariant()
-            $checksumFields = (Get-Content -Raw -Encoding ascii $remoteChecksum).Trim().Split()
-            if ($checksumFields.Count -eq 0 -or $checksumFields[0] -notmatch '^[0-9a-fA-F]{64}$') {
-              throw "Immutable payload checksum is invalid: $version"
-            }
-            $remoteChecksumHash = $checksumFields[0].ToLowerInvariant()
-            if ($remoteZipHash -ne $remoteChecksumHash) {
-              throw "Immutable payload ZIP/checksum mismatch: $version"
+            foreach ($fileName in @("PotteryVolume-GUI-Windows.zip", "PotteryVolume-Setup.exe")) {
+              $checksumFile = "$fileName.sha256"
+              $remoteHash = (Get-FileHash -Algorithm SHA256 $remoteFiles[$fileName].path).Hash.ToLowerInvariant()
+              $checksumFields = (Get-Content -Raw -Encoding ascii $remoteFiles[$checksumFile].path).Trim().Split()
+              if ($checksumFields.Count -eq 0 -or $checksumFields[0] -notmatch '^[0-9a-fA-F]{64}$') {
+                throw "Immutable release checksum is invalid: $version ($checksumFile)"
+              }
+              if ($remoteHash -ne $checksumFields[0].ToLowerInvariant()) {
+                throw "Immutable release file/checksum mismatch: $version ($fileName)"
+              }
             }
           } else {
-            foreach ($fileName in @(
-              "PotteryVolume-GUI-Windows.zip",
-              "PotteryVolume-GUI-Windows.zip.sha256"
-            )) {
+            foreach ($fileName in $releaseFiles) {
               $url = "ftp://${hostName}:${port}${stagingDir}/$fileName"
+              $localPath = if ($fileName.StartsWith("PotteryVolume-GUI-")) { $fileName } else { "dist/$fileName" }
               Invoke-Curl @(
                 "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
                 "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
                 "--keepalive-time", "30", "--ftp-create-dirs",
-                "--user", $credentials, "--upload-file", $fileName, $url
+                "--user", $credentials, "--upload-file", $localPath, $url
               )
             }
 
@@ -256,7 +269,7 @@ jobs:
             gh release create $tag `
               dist/PotteryVolume-Setup.exe `
               --title "PotteryVolume Windows Setup" `
-              --notes "Japanese per-user installer for PotteryVolume. The installed launcher checks for updates when started." `
+              --notes "Japanese per-user installer for PotteryVolume. The GUI checks for updates when started." `
               --target $env:GITHUB_SHA `
               --prerelease `
               --repo $env:GITHUB_REPOSITORY

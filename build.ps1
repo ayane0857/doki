@@ -5,43 +5,18 @@
 $ErrorActionPreference = "Stop"
 $repoRoot = $PSScriptRoot
 $distDir = Join-Path $repoRoot "dist"
-$source = Join-Path $repoRoot "pottery_volume_bootstrap.pyw"
+$buildInfoPath = Join-Path $repoRoot "BUILD_INFO.json"
 
-$tempDir = $env:RUNNER_TEMP
-if (-not $tempDir) {
-    $tempDir = [System.IO.Path]::GetTempPath()
+& $Python (Join-Path $repoRoot "scripts\write_build_info.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "BUILD_INFO.json の生成に失敗しました。終了コード: $LASTEXITCODE"
 }
-$buildTempDir = Join-Path $tempDir ("PotteryVolume-Installer-" + [guid]::NewGuid().ToString("N"))
-$versionFile = Join-Path $buildTempDir "BOOTSTRAP_VERSION"
-$specTempDir = Join-Path $buildTempDir "spec"
-$workTempDir = Join-Path $buildTempDir "work"
-New-Item -ItemType Directory -Force -Path $buildTempDir, $specTempDir, $workTempDir | Out-Null
-
-$version = $env:GITHUB_SHA
-if (-not $version -and (Get-Command git -ErrorAction SilentlyContinue)) {
-    $version = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
+$buildInfo = Get-Content -Raw -Encoding UTF8 $buildInfoPath | ConvertFrom-Json
+if ($buildInfo.version -notmatch '^\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?$') {
+    throw "pyproject.toml の version が不正です: $($buildInfo.version)"
 }
-if ($version -notmatch '^[0-9a-fA-F]{40}$') {
-    $version = "dev"
-}
-[System.IO.File]::WriteAllText($versionFile, $version, [System.Text.Encoding]::ASCII)
-
-New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-Push-Location $repoRoot
-try {
-    & $Python -m PyInstaller --noconfirm --clean --onefile --noconsole `
-        --name PotteryVolume `
-        --distpath $distDir `
-        --workpath $workTempDir `
-        --specpath $specTempDir `
-        --add-data "$versionFile;." `
-        $source
-    if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller failed with exit code $LASTEXITCODE."
-    }
-} finally {
-    Pop-Location
-    Remove-Item -LiteralPath $versionFile -Force -ErrorAction SilentlyContinue
+if ($buildInfo.commit -ne "dev" -and $buildInfo.commit -notmatch '^[0-9a-f]{40}$') {
+    throw "BUILD_INFO.json の commit が不正です: $($buildInfo.commit)"
 }
 
 $isccCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -58,12 +33,15 @@ if (-not $iscc) {
     throw "ISCC.exe が見つかりません。Inno Setup 6.5.0 以降をインストールしてください。"
 }
 
-$languageFile = Join-Path (Split-Path -Parent $iscc) "Languages\Japanese.isl"
+$isccDirectory = Split-Path -Parent $iscc
+$languageFile = Join-Path $isccDirectory "Languages\Japanese.isl"
 if (-not (Test-Path -LiteralPath $languageFile)) {
     throw "Japanese.isl がありません。Inno Setup 6.5.0 以降をインストールしてください。"
 }
 
-& $iscc (Join-Path $repoRoot "installer\PotteryVolume.iss")
+New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+$scriptPath = Join-Path $repoRoot "installer\PotteryVolume.iss"
+& $iscc "/DAppVersion=$($buildInfo.version)" "/DCommitSha=$($buildInfo.commit)" $scriptPath
 if ($LASTEXITCODE -ne 0) {
     throw "ISCC.exe failed with exit code $LASTEXITCODE."
 }
