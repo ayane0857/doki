@@ -15,6 +15,7 @@ from pathlib import Path
 PAYLOAD_BASE_URL = "https://file.ayane0857.net/app/doki/windows"
 PAYLOAD_ZIP_NAME = "PotteryVolume-GUI-Windows.zip"
 PAYLOAD_VERSION_NAME = "BOOTSTRAP_VERSION"
+LAST_RELEASE_NAME = ".last-successful-release"
 
 
 def _resource_path(name: str) -> Path:
@@ -92,6 +93,91 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def parse_sha256_metadata(metadata: str) -> str:
+    fields = metadata.strip().split()
+    if not fields:
+        raise RuntimeError("ダウンロードファイルのSHA-256メタデータが空です。")
+
+    expected = fields[0].lower()
+    if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
+        raise RuntimeError("ダウンロードファイルのSHA-256メタデータが不正です。")
+    return expected
+
+
+def valid_payload_directory(root: Path, version: str) -> Path | None:
+    if len(version) != 40 or any(character not in "0123456789abcdef" for character in version):
+        return None
+    payload_dir = root / "payload" / version
+    marker = payload_dir / ".ready"
+    executable = payload_dir / "PotteryVolume_gui" / "PotteryVolume_gui.exe"
+    if marker.is_file() and executable.is_file():
+        try:
+            if marker.read_text(encoding="ascii").strip() == version:
+                return executable
+        except (OSError, UnicodeDecodeError):
+            return None
+    return None
+
+
+def recorded_release(root: Path) -> Path | None:
+    try:
+        version = (root / LAST_RELEASE_NAME).read_text(encoding="ascii").strip().lower()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return valid_payload_directory(root, version)
+
+
+def write_release_record(root: Path, version: str) -> None:
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = root / (LAST_RELEASE_NAME + ".tmp")
+        temporary.write_text(version, encoding="ascii")
+        temporary.replace(root / LAST_RELEASE_NAME)
+    except OSError:
+        pass
+
+
+def normalize_forwarded_arguments(arguments: list[str], caller_cwd: Path) -> list[str]:
+    path_options = {"--debug-dir", "--json-out"}
+    value_options = {
+        "--scale-mm-per-px", "--scale-bar-px", "--scale-bar-mm",
+        "--scale-points", "--vessel-height-mm", "--axis-x", "--crop",
+        "--liquid-level-y", "--closing-kernel", "--profile-mode",
+        "--min-component-area", "--smooth-window",
+    }
+    value_options.update(path_options)
+
+    normalized = []
+    index = 0
+    positional_pending = True
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in path_options and index + 1 < len(arguments):
+            normalized.extend([argument, str((caller_cwd / arguments[index + 1]).resolve())])
+            index += 2
+        elif argument.startswith("--debug-dir=") or argument.startswith("--json-out="):
+            option, value = argument.split("=", 1)
+            normalized.append(f"{option}={str((caller_cwd / value).resolve())}")
+            index += 1
+        elif argument in value_options:
+            normalized.append(argument)
+            index += 1
+            if index < len(arguments):
+                normalized.append(arguments[index])
+                index += 1
+        elif argument.startswith("-"):
+            normalized.append(argument)
+            index += 1
+        elif positional_pending:
+            normalized.append(str((caller_cwd / argument).resolve()))
+            positional_pending = False
+            index += 1
+        else:
+            normalized.append(argument)
+            index += 1
+    return normalized
+
+
 def download(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(url, headers={"User-Agent": "PotteryVolume-Bootstrap"})
@@ -111,13 +197,19 @@ def prepare_payload() -> Path:
     version = payload_version()
     root = cache_root()
     with preparation_lock(root):
-        selected_version = resolve_payload_version(version)
+        try:
+            selected_version = resolve_payload_version(version)
+        except (OSError, TimeoutError, urllib.error.URLError, UnicodeDecodeError, RuntimeError) as lookup_error:
+            if version == "dev":
+                fallback = recorded_release(root)
+                if fallback is not None:
+                    return fallback
+            raise lookup_error
         payload_dir = root / "payload" / selected_version
-        marker = payload_dir / ".ready"
-        if marker.is_file():
-            executable = payload_dir / "PotteryVolume_gui" / "PotteryVolume_gui.exe"
-            if executable.is_file():
-                return executable
+        cached_executable = valid_payload_directory(root, selected_version)
+        if cached_executable is not None:
+            write_release_record(root, selected_version)
+            return cached_executable
 
         release_base = PAYLOAD_BASE_URL + "/releases/" + selected_version
         archive = root / f"{PAYLOAD_ZIP_NAME}.{selected_version}.part"
@@ -127,7 +219,11 @@ def prepare_payload() -> Path:
         download(release_base + "/" + PAYLOAD_ZIP_NAME, archive)
         download(release_base + "/" + PAYLOAD_ZIP_NAME + ".sha256", checksum)
 
-        expected = checksum.read_text(encoding="ascii").strip().split()[0].lower()
+        try:
+            checksum_metadata = checksum.read_text(encoding="ascii")
+        except UnicodeDecodeError as error:
+            raise RuntimeError("ダウンロードファイルのSHA-256メタデータが不正です。") from error
+        expected = parse_sha256_metadata(checksum_metadata)
         actual = sha256(archive)
         if actual != expected:
             raise RuntimeError("ダウンロードファイルのSHA-256検証に失敗しました。")
@@ -140,20 +236,26 @@ def prepare_payload() -> Path:
         if payload_dir.exists():
             shutil.rmtree(payload_dir)
         staging.rename(payload_dir)
-        (payload_dir / ".ready").write_text(selected_version, encoding="ascii")
         archive.unlink(missing_ok=True)
         checksum.unlink(missing_ok=True)
 
         executable = payload_dir / "PotteryVolume_gui" / "PotteryVolume_gui.exe"
         if not executable.is_file():
             raise RuntimeError("ダウンロードされたアプリにEXEが見つかりませんでした。")
-        return executable
+        (payload_dir / ".ready").write_text(selected_version, encoding="ascii")
+        usable_executable = valid_payload_directory(root, selected_version)
+        if usable_executable is None:
+            raise RuntimeError("ダウンロードされたペイロードの検証に失敗しました。")
+        write_release_record(root, selected_version)
+        return usable_executable
 
 
 def main() -> int:
     try:
         executable = prepare_payload()
-        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
+        caller_cwd = Path.cwd()
+        normalized = normalize_forwarded_arguments(sys.argv[1:], caller_cwd)
+        subprocess.Popen([str(executable), *normalized], cwd=str(executable.parent))
         return 0
     except (OSError, RuntimeError, urllib.error.URLError, zipfile.BadZipFile) as error:
         show_error(

@@ -26,6 +26,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Generated bootstrap payload
+/PotteryVolume-GUI-Windows.zip
+/PotteryVolume-GUI-Windows.zip.sha256
+/PotteryVolume-GUI-Windows.zip.tmp
+/PotteryVolume-GUI-Windows.zip.sha256.tmp
+
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.

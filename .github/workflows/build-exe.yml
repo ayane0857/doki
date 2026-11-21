@@ -96,12 +96,26 @@ jobs:
         run: build_exe.bat
 
       - name: Prepare online payload
+        id: prepare-payload
+        continue-on-error: true
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         shell: pwsh
-        run: python prepare_bootstrap_payload.py
+        run: |
+          python prepare_bootstrap_payload.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zipHash = (Get-FileHash -Algorithm SHA256 "PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
+          $fields = (Get-Content -Raw -Encoding ascii "PotteryVolume-GUI-Windows.zip.sha256").Trim().Split()
+          if ($fields.Count -eq 0 -or $fields[0] -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "Prepared payload checksum metadata is invalid"
+          }
+          if ($fields[0].ToLowerInvariant() -ne $zipHash) {
+            throw "Prepared payload ZIP/checksum mismatch"
+          }
 
       - name: Upload online payload by FTP
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        id: publish-payload
+        continue-on-error: true
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success'
         shell: pwsh
         env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
@@ -116,29 +130,79 @@ jobs:
           $hostName = $env:FTP_HOST -replace '^ftp://', '' -replace '/+$', ''
           $port = if ($env:FTP_PORT) { $env:FTP_PORT } else { "21" }
           $version = "${{ github.sha }}"
-          $releaseDir = "/app/doki/windows/releases/$version"
+          $releaseDir = "/public_html/app/doki/windows/releases/$version"
+          $releaseParent = "/public_html/app/doki/windows/releases"
+          $stagingName = ".$version.$env:GITHUB_RUN_ID.$env:GITHUB_RUN_ATTEMPT"
+          $stagingDir = "$releaseParent/$stagingName"
+          $pointerUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/release.txt"
           $credentials = "$($env:FTP_USERNAME):$($env:FTP_PASSWORD)"
 
-          foreach ($fileName in @(
-            "PotteryVolume-GUI-Windows.zip",
-            "PotteryVolume-GUI-Windows.zip.sha256"
-          )) {
-            $url = "ftp://${hostName}:${port}${releaseDir}/$fileName"
-            & curl.exe --fail --silent --show-error --ssl-reqd --ftp-create-dirs --user $credentials --upload-file $fileName $url
+          $remoteZip = Join-Path $env:RUNNER_TEMP "remote-$version.zip"
+          $remoteChecksum = Join-Path $env:RUNNER_TEMP "remote-$version.zip.sha256"
+          $remoteZipUrl = "ftp://${hostName}:${port}${releaseDir}/PotteryVolume-GUI-Windows.zip"
+          $remoteChecksumUrl = "ftp://${hostName}:${port}${releaseDir}/PotteryVolume-GUI-Windows.zip.sha256"
+
+          & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials --output $remoteZip $remoteZipUrl *> $null
+          $remoteZipExists = $LASTEXITCODE -eq 0
+          & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials --output $remoteChecksum $remoteChecksumUrl *> $null
+          $remoteChecksumExists = $LASTEXITCODE -eq 0
+
+          if ($remoteZipExists -or $remoteChecksumExists) {
+            if (-not $remoteZipExists -or -not $remoteChecksumExists) {
+              throw "Immutable payload is incomplete: $version"
+            }
+
+            $localZipHash = (Get-FileHash -Algorithm SHA256 "PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
+            $remoteZipHash = (Get-FileHash -Algorithm SHA256 $remoteZip).Hash.ToLowerInvariant()
+            $checksumFields = (Get-Content -Raw -Encoding ascii $remoteChecksum).Trim().Split()
+            if ($checksumFields.Count -eq 0 -or $checksumFields[0] -notmatch '^[0-9a-fA-F]{64}$') {
+              throw "Immutable payload checksum is invalid: $version"
+            }
+            $remoteChecksumHash = $checksumFields[0].ToLowerInvariant()
+            if ($remoteZipHash -ne $remoteChecksumHash) {
+              throw "Immutable payload ZIP/checksum mismatch: $version"
+            }
+            if ($remoteZipHash -ne $localZipHash) {
+              throw "Immutable payload differs from the rebuilt commit: $version"
+            }
+          } else {
+            foreach ($fileName in @(
+              "PotteryVolume-GUI-Windows.zip",
+              "PotteryVolume-GUI-Windows.zip.sha256"
+            )) {
+              $url = "ftp://${hostName}:${port}${stagingDir}/$fileName"
+              & curl.exe --fail --silent --show-error --ssl-reqd --ftp-create-dirs --user $credentials --upload-file $fileName $url
+              if ($LASTEXITCODE -ne 0) {
+                throw "FTP upload failed: $fileName"
+              }
+            }
+
+            & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials `
+              --quote "RNFR $stagingDir" `
+              --quote "RNTO $releaseDir" `
+              "ftp://${hostName}:${port}/"
             if ($LASTEXITCODE -ne 0) {
-              throw "FTP upload failed: $fileName"
+              throw "FTP publication directory rename failed"
             }
           }
 
           $pointerFile = Join-Path $env:RUNNER_TEMP "release.txt"
           Set-Content -Path $pointerFile -Value $version -NoNewline -Encoding ascii
-          $pointerUrl = "ftp://${hostName}:${port}/app/doki/windows/latest/release.txt"
-          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-create-dirs --user $credentials --upload-file $pointerFile $pointerUrl
+          $pointerTempUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt"
+          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-create-dirs --user $credentials --upload-file $pointerFile $pointerTempUrl
           if ($LASTEXITCODE -ne 0) {
-            throw "FTP upload failed: release.txt"
+            throw "FTP upload failed: temporary release.txt"
+          }
+          & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials `
+            --quote "RNFR /public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt" `
+            --quote "RNTO /public_html/app/doki/windows/latest/release.txt" `
+            "ftp://${hostName}:${port}/"
+          if ($LASTEXITCODE -ne 0) {
+            throw "FTP pointer rename failed: release.txt"
           }
 
       - name: Upload bootstrap Artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: PotteryVolume-Windows-Bootstrap-${{ github.sha }}
@@ -147,8 +211,31 @@ jobs:
           compression-level: 0 # EXEは圧縮しても縮まず時間の無駄
           retention-days: 14
 
+      - name: Upload full application Artifact
+        if: github.event_name == 'pull_request' || github.ref != 'refs/heads/master' || steps.prepare-payload.outcome != 'success' || steps.publish-payload.outcome != 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: PotteryVolume-Windows-Full-${{ github.sha }}
+          path: |
+            PotteryVolume-GUI-Windows.zip
+            PotteryVolume-GUI-Windows.zip.sha256
+            dist/PotteryVolume
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload CLI Artifact
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v7
+        with:
+          name: PotteryVolume-Windows-CLI-${{ github.sha }}
+          path: dist/PotteryVolume
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
       - name: Publish bootstrap EXE to GitHub Release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

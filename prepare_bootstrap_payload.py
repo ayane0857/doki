@@ -21,17 +21,23 @@ def main() -> None:
     if not SOURCE.is_dir():
         raise SystemExit(f"Missing payload directory: {SOURCE}")
 
-    if ARCHIVE.exists():
-        ARCHIVE.unlink()
-    with zipfile.ZipFile(ARCHIVE, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    temporary_archive = ARCHIVE.with_suffix(ARCHIVE.suffix + ".tmp")
+    temporary_checksum = CHECKSUM.with_suffix(CHECKSUM.suffix + ".tmp")
+    temporary_archive.unlink(missing_ok=True)
+    temporary_checksum.unlink(missing_ok=True)
+
+    with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in SOURCE.rglob("*"):
             if path.is_file():
                 archive.write(path, path.relative_to(SOURCE.parent).as_posix())
 
-    CHECKSUM.write_text(
-        f"{sha256(ARCHIVE)}  {ARCHIVE.name}\n",
+    checksum = sha256(temporary_archive)
+    temporary_checksum.write_text(
+        f"{checksum}  {ARCHIVE.name}\n",
         encoding="ascii",
     )
+    temporary_archive.replace(ARCHIVE)
+    temporary_checksum.replace(CHECKSUM)
     print(f"Created {ARCHIVE}")
     print(f"Created {CHECKSUM}")
 
