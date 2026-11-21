@@ -8,7 +8,18 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+/build/*
+!/build/*.bat
+!/build/*.ps1
+!/build/*.py
+!/build/*.sh
+!/build/*.spec
+!/build/scripts/
+/build/scripts/*
+!/build/scripts/*.py
+!/build/installer/
+/build/installer/*
+!/build/installer/PotteryVolume.iss
 develop-eggs/
 dist/
 downloads/

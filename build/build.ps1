@@ -3,11 +3,11 @@
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = $PSScriptRoot
-$distDir = Join-Path $repoRoot "dist"
-$buildInfoPath = Join-Path $repoRoot "BUILD_INFO.json"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$distDir = Join-Path $repoRoot "build\dist"
+$buildInfoPath = Join-Path $PSScriptRoot "BUILD_INFO.json"
 
-& $Python (Join-Path $repoRoot "scripts\write_build_info.py")
+& $Python (Join-Path $PSScriptRoot "scripts\write_build_info.py")
 if ($LASTEXITCODE -ne 0) {
     throw "BUILD_INFO.json の生成に失敗しました。終了コード: $LASTEXITCODE"
 }
@@ -87,7 +87,7 @@ if (-not (Test-Path -LiteralPath $languageFile)) {
 }
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-$scriptPath = Join-Path $repoRoot "installer\PotteryVolume.iss"
+$scriptPath = Join-Path $PSScriptRoot "installer\PotteryVolume.iss"
 & $iscc "/DAppVersion=$($buildInfo.version)" "/DCommitSha=$($buildInfo.commit)" "/DJapaneseLanguageFile=$languageFile" $scriptPath
 if ($LASTEXITCODE -ne 0) {
     throw "ISCC.exe failed with exit code $LASTEXITCODE."

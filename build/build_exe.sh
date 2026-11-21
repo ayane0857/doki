@@ -2,7 +2,8 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$script_dir"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+cd "$repo_root"
 
 python_cmd=
 for candidate in python3 python /usr/bin/python3; do
@@ -35,10 +36,10 @@ else
 fi
 
 "$python_cmd" -m pip install "${pip_args[@]}" -r requirements-dev.txt
-"$python_cmd" scripts/write_build_info.py
-"$python_cmd" -m PyInstaller --noconfirm --clean PotteryVolume.spec
-"$python_cmd" -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
+"$python_cmd" build/scripts/write_build_info.py
+"$python_cmd" -m PyInstaller --noconfirm --clean --workpath build/work --distpath build/dist build/PotteryVolume.spec
+"$python_cmd" -m PyInstaller --noconfirm --clean --workpath build/work --distpath build/dist build/PotteryVolume_gui.spec
 
 echo
-echo "Built: $script_dir/dist/PotteryVolume/PotteryVolume"
-echo "Built: $script_dir/dist/PotteryVolume_gui/PotteryVolume_gui"
+echo "Built: $repo_root/build/dist/PotteryVolume/PotteryVolume"
+echo "Built: $repo_root/build/dist/PotteryVolume_gui/PotteryVolume_gui"

@@ -9,7 +9,7 @@ import subprocess
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def resolve_commit() -> str:
@@ -30,7 +30,7 @@ def main() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         version = tomllib.load(file)["project"]["version"]
     info = {"version": version, "commit": resolve_commit()}
-    (ROOT / "BUILD_INFO.json").write_text(
+    (ROOT / "build" / "BUILD_INFO.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(f"BUILD_INFO.json: version={version}, commit={info['commit']}")
