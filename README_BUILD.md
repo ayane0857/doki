@@ -49,4 +49,14 @@ python -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 
 ## GitHub Actions
 
-`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。ビルド成功時は、両方の配布フォルダーを `PotteryVolume-Windows-<commit-sha>` というArtifact名でアップロードします。
+`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。ビルド成功時は、ダウンロード版として使う単独の `PotteryVolume_bootstrap.exe` を
+`PotteryVolume-Windows-Bootstrap-<commit-sha>` Artifactとしてアップロードします。
+同じEXEを `continuous-windows` GitHub Releaseにも添付します。
+GUI版の配布フォルダーは `PotteryVolume-GUI-Windows.zip` と
+`PotteryVolume-GUI-Windows.zip.sha256` にまとめます。これらを
+`https://file.ayane0857.net/app/doki/windows/latest/` にアップロードしてください。
+
+GitHub Actionsでは、`FTP_HOST`、`FTP_USERNAME`、`FTP_PASSWORD` を
+リポジトリのActions Secretsへ登録すると、masterへのpushまたは手動実行時に
+このディレクトリへFTPで自動アップロードします。ポートが21以外の場合は
+`FTP_PORT` Secretも登録してください。
