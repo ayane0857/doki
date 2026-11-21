@@ -278,6 +278,17 @@ def test_cancelled_close_does_not_start_verified_setup(
     assert not installer_directory.exists()
 
 
+def test_installer_replaces_payload_only_in_post_install_and_guards_relaunch():
+    installer = Path(__file__).parents[1] / "installer" / "PotteryVolume.iss"
+    source = installer.read_text(encoding="utf-8")
+
+    assert "if CurStep = ssPostInstall then begin" in source
+    assert "if CurStep = ssInstall then begin" not in source
+    assert "PayloadReplaced := False;" in source
+    assert "PayloadReplaced := True;" in source
+    assert "(CurStep = ssDone) and IsUpdateMode and PayloadReplaced" in source
+
+
 def test_source_execution_skips_startup_update_check(monkeypatch, qt_widget):
     monkeypatch.setattr(window_module.sys, "platform", "win32")
     window = MainWindow(None)

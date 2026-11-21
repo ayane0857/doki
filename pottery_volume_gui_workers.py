@@ -83,6 +83,7 @@ class SetupDownloadWorker(QObject):
         self.destination = destination
         self._cancel_requested = threading.Event()
 
+    @Slot()
     def cancel(self) -> None:
         self._cancel_requested.set()
 

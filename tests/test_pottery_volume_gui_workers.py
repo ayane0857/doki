@@ -21,6 +21,7 @@ from pottery_volume_gui_workers import (
     PairWorker,
     ScaleFinished,
     ScaleWorker,
+    SetupDownloadWorker,
     WorkerFailed,
     _error_summary,
 )
@@ -39,6 +40,28 @@ def test_error_summary_handles_empty_and_multiline_messages(
     expected: str,
 ) -> None:
     assert _error_summary(error) == expected
+
+
+def test_setup_download_cancel_sets_event_used_by_running_worker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    observed: list[bool] = []
+
+    def blocked_download(_commit, _destination, *, progress):
+        observed.append(progress(0, 100))
+        raise RuntimeError("download should have been cancelled")
+
+    monkeypatch.setattr(workers_module, "download_setup", blocked_download)
+    worker = SetupDownloadWorker("b" * 40, tmp_path / "PotteryVolume-Setup.exe")
+    cancelled: list[bool] = []
+    worker.cancelled.connect(lambda: cancelled.append(True))
+
+    worker.cancel()
+    worker.run()
+
+    assert observed == [False]
+    assert cancelled == [True]
 
 
 def test_scale_worker_failure_includes_source_and_generation(caplog, tmp_path: Path):

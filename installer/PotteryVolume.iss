@@ -65,6 +65,7 @@ var
   StagingRoot: String;
   PayloadZip: String;
   PreparedPayload: Boolean;
+  PayloadReplaced: Boolean;
 
 function IsHexadecimal(const Value: String): Boolean;
 var
@@ -199,6 +200,7 @@ begin
   Result := '';
   NeedsRestart := False;
   PreparedPayload := False;
+  PayloadReplaced := False;
   repeat
     try
       Result := DownloadAndPreparePayload;
@@ -264,9 +266,12 @@ var
   AppDirectory: String;
   AppExecutable: String;
 begin
-  if CurStep = ssInstall then begin
+  if CurStep = ssPostInstall then begin
+    PayloadReplaced := False;
     try
-      SwapPreparedPayload;
+      if not SwapPreparedPayload then
+        RaiseException('アプリケーションの配置に失敗しました。');
+      PayloadReplaced := True;
     except
       ErrorText := GetExceptionMessage;
       Log('Payload replacement failed: ' + ErrorText);
@@ -276,7 +281,7 @@ begin
       Abort;
     end;
   end;
-  if (CurStep = ssDone) and IsUpdateMode then begin
+  if (CurStep = ssDone) and IsUpdateMode and PayloadReplaced then begin
     AppDirectory := ExpandConstant('{app}\PotteryVolume_gui');
     AppExecutable := AppDirectory + '\PotteryVolume_gui.exe';
     if FileExists(AppExecutable) then begin
