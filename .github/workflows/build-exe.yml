@@ -98,7 +98,7 @@ jobs:
       - name: Prepare online payload
         id: prepare-payload
         continue-on-error: true
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
         shell: pwsh
         run: |
           python prepare_bootstrap_payload.py
@@ -115,7 +115,7 @@ jobs:
       - name: Upload online payload by FTP
         id: publish-payload
         continue-on-error: true
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success'
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) && steps.prepare-payload.outcome == 'success'
         shell: pwsh
         env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
@@ -201,55 +201,27 @@ jobs:
             throw "FTP pointer rename failed: release.txt"
           }
 
-      - name: Upload bootstrap Artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: PotteryVolume-Windows-Bootstrap-${{ github.sha }}
-          path: dist/PotteryVolume_bootstrap.exe
-          if-no-files-found: error
-          compression-level: 0 # EXEは圧縮しても縮まず時間の無駄
-          retention-days: 14
-
-      - name: Upload full application Artifact
-        if: github.event_name == 'pull_request' || github.ref != 'refs/heads/master' || steps.prepare-payload.outcome != 'success' || steps.publish-payload.outcome != 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: PotteryVolume-Windows-Full-${{ github.sha }}
-          path: |
-            PotteryVolume-GUI-Windows.zip
-            PotteryVolume-GUI-Windows.zip.sha256
-            dist/PotteryVolume
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      - name: Upload CLI Artifact
-        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v7
-        with:
-          name: PotteryVolume-Windows-CLI-${{ github.sha }}
-          path: dist/PotteryVolume
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      - name: Publish bootstrap EXE to GitHub Release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
+      - name: Publish bootstrap files to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "continuous-windows"
+          $tag = $env:GITHUB_REF_NAME
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag dist/PotteryVolume_bootstrap.exe `
+            gh release create $tag `
+              dist/PotteryVolume_bootstrap.exe `
+              pottery_volume_bootstrap.py `
               --title "PotteryVolume Windows (bootstrap)" `
-              --notes "Small online bootstrap EXE. The application is downloaded from the configured FTP server on first launch." `
+              --notes "Bootstrap downloads and launches the application from the configured FTP server. pottery_volume_bootstrap.py is also available as a Python downloader." `
               --target $env:GITHUB_SHA `
               --prerelease
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
-            gh release upload $tag dist/PotteryVolume_bootstrap.exe --clobber
+            gh release upload $tag `
+              dist/PotteryVolume_bootstrap.exe `
+              pottery_volume_bootstrap.py `
+              --clobber
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

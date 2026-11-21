@@ -49,11 +49,11 @@ python -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 
 ## GitHub Actions
 
-`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。ペイロードのFTP公開に成功したmasterビルドでは、ダウンロード版として使う単独の `PotteryVolume_bootstrap.exe` を
-`PotteryVolume-Windows-Bootstrap-<commit-sha>` Artifactとしてアップロードし、
-同じEXEを `continuous-windows` GitHub Releaseにも添付します。
-公開が失敗したビルド、PRビルド、公開対象外のタグビルドでは、
-完全版のZIPとチェックサムを `PotteryVolume-Windows-Full-<commit-sha>` Artifactとしてアップロードします。
+`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。PRビルドでは配布ファイルをアップロードせず、ビルドとテストだけを実行します。
+masterまたは`v*`タグビルドでは、ペイロードのFTP公開に成功した場合、
+完全版のZIPとチェックサムをFTPサーバーへのみ公開します。
+`PotteryVolume_bootstrap.exe` と `pottery_volume_bootstrap.py` は
+`v*`タグビルドでのみGitHub Releaseへ添付し、タグ名のReleaseを使用します。
 GUI版の配布フォルダーは `PotteryVolume-GUI-Windows.zip` と
 `PotteryVolume-GUI-Windows.zip.sha256` にまとめます。これらを
 `https://file.ayane0857.net/app/doki/windows/releases/<commit-sha>/` にアップロードしてください。
