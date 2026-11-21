@@ -35,6 +35,7 @@ else
 fi
 
 "$python_cmd" -m pip install "${pip_args[@]}" -r requirements-dev.txt
+"$python_cmd" scripts/write_build_info.py
 "$python_cmd" -m PyInstaller --noconfirm --clean PotteryVolume.spec
 "$python_cmd" -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 

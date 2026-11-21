@@ -43,6 +43,7 @@ py-modules = [
     "pottery_volume_gui_profiles",
     "pottery_volume_gui_scale",
     "pottery_volume_gui_style",
+    "pottery_volume_updater",
 ]
 
 [tool.ruff]
@@ -70,6 +71,7 @@ include = [
     "pottery_volume_gui_profiles.py",
     "pottery_volume_gui_scale.py",
     "pottery_volume_gui_style.py",
+    "pottery_volume_updater.py",
 ]
 exclude = ["build", "dist", ".venv", ".venv-build", "tests"]
 reportMissingTypeStubs = false
@@ -82,6 +84,7 @@ files = [
     "pottery_volume_core.py",
     "pottery_volume_gui_helpers.py",
     "pottery_volume_gui_workers.py",
+    "pottery_volume_updater.py",
     "pottery_scale.py",
     "pottery_volume_cli.py",
 ]
