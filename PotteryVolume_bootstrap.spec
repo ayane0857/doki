@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 a = Analysis(
-    ['pottery_volume_bootstrap.py'],
+    ['pottery_volume_bootstrap.pyw'],
     pathex=[],
     binaries=[],
     datas=[('BOOTSTRAP_VERSION', '.')],
@@ -20,7 +20,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='PotteryVolume_bootstrap',
+    name='PotteryVolume',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

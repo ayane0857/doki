@@ -3,11 +3,11 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import threading
-import queue
 import urllib.error
 import urllib.request
 import zipfile
@@ -18,7 +18,7 @@ PAYLOAD_BASE_URL = "https://file.ayane0857.net/app/doki/windows"
 PAYLOAD_ZIP_NAME = "PotteryVolume-GUI-Windows.zip"
 PAYLOAD_VERSION_NAME = "BOOTSTRAP_VERSION"
 LAST_RELEASE_NAME = ".last-successful-release"
-INSTALL_LOCATION_NAME = "install-location.txt"
+PAYLOAD_KEEP_COUNT = 2
 
 
 def _resource_path(name: str) -> Path:
@@ -34,15 +34,9 @@ def payload_version() -> str:
 
 
 def cache_root() -> Path:
-    base_root = default_cache_root()
-    install_location = base_root / INSTALL_LOCATION_NAME
-    try:
-        configured = install_location.read_text(encoding="utf-8").strip()
-        if configured:
-            return Path(configured).expanduser()
-    except (OSError, UnicodeDecodeError):
-        pass
-    return base_root
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return default_cache_root()
 
 
 def default_cache_root() -> Path:
@@ -52,117 +46,33 @@ def default_cache_root() -> Path:
     return Path.home() / ".cache" / "PotteryVolume"
 
 
-def ensure_install_location() -> Path:
-    base_root = default_cache_root()
-    base_root.mkdir(parents=True, exist_ok=True)
-    install_location = base_root / INSTALL_LOCATION_NAME
-
-    try:
-        configured = install_location.read_text(encoding="utf-8").strip()
-        if configured:
-            return Path(configured).expanduser()
-    except (OSError, UnicodeDecodeError):
-        pass
-
-    if sys.platform != "win32":
-        return base_root
-
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(
-            parent=root,
-            initialdir=str(base_root),
-            title="PotteryVolume のインストール先を選択",
-        )
-        root.destroy()
-    except (ImportError, tk.TclError):
-        return base_root
-
-    install_root = Path(selected).expanduser() if selected else base_root
-    install_root.mkdir(parents=True, exist_ok=True)
-    try:
-        install_location.write_text(str(install_root), encoding="utf-8")
-    except OSError:
-        pass
-    return install_root
-
-
-def create_installer_shortcuts(executable: Path) -> None:
-    if sys.platform != "win32":
-        return
-
-    desktop = os.environ.get("USERPROFILE")
-    if desktop:
-        desktop_shortcut = Path(desktop) / "Desktop" / "PotteryVolume.lnk"
-        start_menu = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-        start_menu.mkdir(parents=True, exist_ok=True)
-        start_shortcut = start_menu / "PotteryVolume.lnk"
-
-        escaped = str(executable).replace("'", "''")
-        for shortcut in (desktop_shortcut, start_shortcut):
-            try:
-                shortcut.parent.mkdir(parents=True, exist_ok=True)
-                destination = str(shortcut).replace("'", "''")
-                script = (
-                    "$shell = New-Object -ComObject WScript.Shell; "
-                    f"$shortcut = $shell.CreateShortcut('{destination}'); "
-                    f"$shortcut.TargetPath = '{escaped}'; "
-                    "$shortcut.WorkingDirectory = [System.IO.Path]::GetDirectoryName($shortcut.TargetPath); "
-                    "$shortcut.Save()"
-                )
-                subprocess.run(
-                    [
-                        "powershell.exe",
-                        "-NoProfile",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-Command",
-                        script,
-                        str(executable),
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=30,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
-
-
-def install_downloaded_payload(executable: Path, install_root: Path) -> Path:
-    source_payload = executable.parents[1]
-    source_gui = source_payload / "PotteryVolume_gui"
-    destination_gui = install_root / "PotteryVolume_gui"
-    destination_gui.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_gui, destination_gui, dirs_exist_ok=True)
-    installed = destination_gui / executable.name
-    if not installed.is_file():
-        raise RuntimeError("インストール先にアプリケーションのEXEを作成できませんでした。")
-    return installed
-
-
 @contextmanager
 def preparation_lock(root: Path):
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / ".prepare.lock"
     if sys.platform == "win32":
-        mutex_name = "Local\\PotteryVolumePayload-" + hashlib.sha256(str(root).lower().encode()).hexdigest()
-        handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+        kernel32.ReleaseMutex.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        normalized_root = os.path.normcase(str(root.resolve()))
+        mutex_name = "Local\\PotteryVolumePayload-" + hashlib.sha256(normalized_root.encode()).hexdigest()
+        handle = kernel32.CreateMutexW(None, False, mutex_name)
         if not handle:
-            raise OSError("共有キャッシュのロックを作成できませんでした。")
+            raise OSError(ctypes.get_last_error(), "共有キャッシュのロックを作成できませんでした。")
         try:
-            wait_result = ctypes.windll.kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
+            wait_result = kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
             if wait_result not in (0, 0x80):
-                raise OSError("共有キャッシュのロックを取得できませんでした。")
+                raise OSError(ctypes.get_last_error(), "共有キャッシュのロックを取得できませんでした。")
             yield
         finally:
-            ctypes.windll.kernel32.ReleaseMutex(handle)
-            ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.ReleaseMutex(handle)
+            kernel32.CloseHandle(handle)
     else:
         import fcntl
 
@@ -174,9 +84,9 @@ def preparation_lock(root: Path):
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def resolve_payload_version(version: str) -> str:
+def resolve_payload_version(version: str = "latest") -> str:
     selected = version
-    if selected == "dev":
+    if selected in {"dev", "latest"}:
         with urllib.request.urlopen(PAYLOAD_BASE_URL + "/latest/release.txt", timeout=60) as response:
             selected = response.read().decode("ascii").strip()
     if len(selected) != 40 or any(character not in "0123456789abcdefABCDEF" for character in selected):
@@ -190,7 +100,7 @@ def safe_extract(zip_path: Path, destination: Path) -> None:
         for member in archive.infolist():
             target = (destination / member.filename).resolve()
             if destination_resolved not in target.parents:
-                raise RuntimeError("ZIP contains an invalid path.")
+                raise RuntimeError("ZIPに不正なパスが含まれています。")
         archive.extractall(destination)
 
 
@@ -237,13 +147,129 @@ def recorded_release(root: Path) -> Path | None:
 
 
 def write_release_record(root: Path, version: str) -> None:
+    if len(version) != 40 or any(character not in "0123456789abcdef" for character in version):
+        raise RuntimeError("記録するペイロードのバージョンが不正です。")
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = root / (LAST_RELEASE_NAME + ".tmp")
     try:
-        root.mkdir(parents=True, exist_ok=True)
-        temporary = root / (LAST_RELEASE_NAME + ".tmp")
         temporary.write_text(version, encoding="ascii")
         temporary.replace(root / LAST_RELEASE_NAME)
     except OSError:
-        pass
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _payload_version_names(root: Path) -> set[str]:
+    try:
+        return {path.name for path in (root / "payload").iterdir()}
+    except OSError:
+        return set()
+
+
+def _running_payload_versions(root: Path) -> set[str]:
+    if sys.platform != "win32":
+        return set()
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        dword = ctypes.c_uint32
+        bytes_returned = dword()
+        psapi.EnumProcesses.argtypes = [ctypes.POINTER(dword), dword, ctypes.POINTER(dword)]
+        psapi.EnumProcesses.restype = ctypes.c_int
+        capacity = 4096
+        while True:
+            process_ids = (dword * capacity)()
+            if not psapi.EnumProcesses(
+                process_ids,
+                ctypes.sizeof(process_ids),
+                ctypes.byref(bytes_returned),
+            ):
+                return _payload_version_names(root)
+            if bytes_returned.value < ctypes.sizeof(process_ids):
+                break
+            capacity *= 2
+            if capacity > 65536:
+                raise OSError("実行中プロセスを一覧できませんでした。")
+
+        kernel32.OpenProcess.argtypes = [dword, ctypes.c_int, dword]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            ctypes.c_void_p,
+            dword,
+            ctypes.POINTER(ctypes.c_wchar),
+            ctypes.POINTER(dword),
+        ]
+        kernel32.QueryFullProcessImageNameW.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+
+        protected: set[str] = set()
+        payload_root = os.path.normcase(str((root / "payload").resolve()))
+        count = min(bytes_returned.value // ctypes.sizeof(dword), len(process_ids))
+        for process_id in process_ids[:count]:
+            process = kernel32.OpenProcess(0x1000, False, process_id)
+            if not process:
+                continue
+            try:
+                image_buffer = ctypes.create_unicode_buffer(32768)
+                image_length = dword(len(image_buffer))
+                if not kernel32.QueryFullProcessImageNameW(
+                    process,
+                    0,
+                    image_buffer,
+                    ctypes.byref(image_length),
+                ):
+                    continue
+                image_path = os.path.normcase(os.path.abspath(image_buffer.value))
+                if not image_path.startswith(payload_root + os.sep):
+                    continue
+                executable = Path(image_buffer.value)
+                if executable.name.casefold() == "potteryvolume_gui.exe":
+                    version = executable.parent.parent.name.lower()
+                    if len(version) == 40 and all(char in "0123456789abcdef" for char in version):
+                        protected.add(version)
+            finally:
+                kernel32.CloseHandle(process)
+        return protected
+    except (AttributeError, OSError, TypeError, ValueError):
+        # If process enumeration is unavailable, leave old payloads in place.
+        return _payload_version_names(root)
+
+
+def cleanup_old_payloads(root: Path, current_version: str, keep_count: int = PAYLOAD_KEEP_COUNT) -> None:
+    payload_root = root / "payload"
+    if not payload_root.is_dir():
+        return
+
+    versions = [
+        path
+        for path in payload_root.iterdir()
+        if path.is_dir()
+        and len(path.name) == 40
+        and all(character in "0123456789abcdef" for character in path.name)
+    ]
+    def version_timestamp(path: Path) -> int:
+        marker = path / ".ready"
+        try:
+            return marker.stat().st_mtime_ns
+        except OSError:
+            return path.stat().st_mtime_ns
+
+    try:
+        versions.sort(key=version_timestamp, reverse=True)
+    except OSError:
+        return
+    keep = {path.name for path in versions[:max(keep_count, 0)]}
+    keep.add(current_version)
+    keep.update(_running_payload_versions(root))
+    for path in versions:
+        if path.name not in keep:
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                # The next launch can retry cleanup after the files are no longer in use.
+                continue
 
 
 def normalize_forwarded_arguments(arguments: list[str], caller_cwd: Path) -> list[str]:
@@ -289,7 +315,10 @@ def normalize_forwarded_arguments(arguments: list[str], caller_cwd: Path) -> lis
 
 def download(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "PotteryVolume-Bootstrap"})
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"PotteryVolume-Bootstrap/{payload_version()}"},
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         with destination.open("wb") as output:
             shutil.copyfileobj(response, output, length=1024 * 1024)
@@ -302,24 +331,104 @@ def show_error(message: str) -> None:
         print(message, file=sys.stderr)
 
 
+def _resolve_payload_target(root: Path) -> tuple[str, Path | None]:
+    try:
+        selected_version = resolve_payload_version("latest")
+    except (OSError, TimeoutError, urllib.error.URLError, UnicodeDecodeError, RuntimeError):
+        fallback = recorded_release(root)
+        if fallback is None:
+            raise
+        return fallback.parent.parent.name, fallback
+    return selected_version, valid_payload_directory(root, selected_version)
+
+
+def _record_and_cleanup(root: Path, version: str) -> Path:
+    executable = valid_payload_directory(root, version)
+    if executable is None:
+        raise RuntimeError("ダウンロードされたペイロードの検証に失敗しました。")
+    write_release_record(root, version)
+    try:
+        cleanup_old_payloads(root, version)
+    except OSError:
+        pass
+    return executable
+
+
+def prepare_payload(selected_version: str | None = None) -> Path:
+    root = cache_root()
+    with preparation_lock(root):
+        if selected_version is None:
+            selected_version, cached_executable = _resolve_payload_target(root)
+        else:
+            selected_version = resolve_payload_version(selected_version)
+            cached_executable = valid_payload_directory(root, selected_version)
+
+        if cached_executable is not None:
+            return _record_and_cleanup(root, selected_version)
+
+        payload_dir = root / "payload" / selected_version
+        archive = root / f"{PAYLOAD_ZIP_NAME}.{selected_version}.part"
+        checksum = root / f"{PAYLOAD_ZIP_NAME}.{selected_version}.sha256.part"
+        staging = root / "payload" / f".{selected_version}.part"
+        release_base = PAYLOAD_BASE_URL + "/releases/" + selected_version
+
+        try:
+            download(release_base + "/" + PAYLOAD_ZIP_NAME, archive)
+            download(release_base + "/" + PAYLOAD_ZIP_NAME + ".sha256", checksum)
+            try:
+                checksum_metadata = checksum.read_text(encoding="ascii")
+            except UnicodeDecodeError as error:
+                raise RuntimeError("ダウンロードファイルのSHA-256メタデータが不正です。") from error
+            expected = parse_sha256_metadata(checksum_metadata)
+            if sha256(archive) != expected:
+                raise RuntimeError("ダウンロードファイルのSHA-256検証に失敗しました。")
+
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.mkdir(parents=True)
+            safe_extract(archive, staging)
+            staged_executable = staging / "PotteryVolume_gui" / "PotteryVolume_gui.exe"
+            if not staged_executable.is_file():
+                raise RuntimeError("ダウンロードされたアプリにEXEが見つかりませんでした。")
+
+            if payload_dir.exists():
+                if selected_version in _running_payload_versions(root):
+                    raise RuntimeError("同じ版のPotteryVolumeが起動中のため、更新ファイルを入れ替えられません。")
+                shutil.rmtree(payload_dir)
+            staging.rename(payload_dir)
+            (payload_dir / ".ready").write_text(selected_version, encoding="ascii")
+            return _record_and_cleanup(root, selected_version)
+        finally:
+            archive.unlink(missing_ok=True)
+            checksum.unlink(missing_ok=True)
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+
+
 def prepare_payload_with_loading_window() -> Path:
     if sys.platform != "win32":
         return prepare_payload()
+
+    root = cache_root()
+    with preparation_lock(root):
+        selected_version, cached_executable = _resolve_payload_target(root)
+        if cached_executable is not None:
+            return _record_and_cleanup(root, selected_version)
 
     try:
         import tkinter as tk
         from tkinter import ttk
     except ImportError:
-        return prepare_payload()
+        return prepare_payload(selected_version)
 
     try:
-        root = tk.Tk()
-        root.title("PotteryVolume")
-        root.resizable(False, False)
-        root.geometry("360x110")
-        root.attributes("-topmost", True)
+        root_window = tk.Tk()
+        root_window.title("PotteryVolume")
+        root_window.resizable(False, False)
+        root_window.geometry("360x110")
+        root_window.attributes("-topmost", True)
 
-        frame = ttk.Frame(root, padding=20)
+        frame = ttk.Frame(root_window, padding=20)
         frame.pack(fill="both", expand=True)
         ttk.Label(
             frame,
@@ -330,218 +439,68 @@ def prepare_payload_with_loading_window() -> Path:
         progress.pack()
         progress.start(10)
     except tk.TclError:
-        return prepare_payload()
+        return prepare_payload(selected_version)
 
     outcome: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
 
     def prepare() -> None:
         try:
-            outcome.put((True, prepare_payload()))
-        except (OSError, RuntimeError, urllib.error.URLError, zipfile.BadZipFile) as error:
+            outcome.put((True, prepare_payload(selected_version)))
+        except (OSError, RuntimeError, urllib.error.URLError, UnicodeDecodeError, zipfile.BadZipFile) as error:
             outcome.put((False, error))
 
     worker = threading.Thread(target=prepare, daemon=True)
     worker.start()
+    result: object = None
+    try:
+        while worker.is_alive():
+            root_window.update()
+            worker.join(timeout=0.05)
+        if not outcome.empty():
+            succeeded, result = outcome.get()
+            if not succeeded:
+                if isinstance(result, Exception):
+                    raise result
+                raise RuntimeError("アプリケーションの準備中にエラーが発生しました。")
+    finally:
+        root_window.destroy()
 
-    result = None
-    while worker.is_alive():
-        root.update()
-        worker.join(timeout=0.05)
-
-    if not outcome.empty():
-        succeeded, result = outcome.get()
-        if not succeeded:
-            root.destroy()
-            if isinstance(result, Exception):
-                raise result
-            raise RuntimeError("アプリケーションの準備中にエラーが発生しました。")
-
-    root.destroy()
     if not isinstance(result, Path):
         raise RuntimeError("ダウンロードされたアプリの準備に失敗しました。")
     return result
 
 
-def run_installer() -> int:
-    base_root = default_cache_root()
-    install_location = base_root / INSTALL_LOCATION_NAME
-    try:
-        configured = install_location.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeDecodeError):
-        configured = ""
-    if configured:
-        executable = prepare_payload_with_loading_window()
-        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
-        return 0
-
-    try:
-        import tkinter as tk
-        from tkinter import filedialog, ttk
-    except ImportError:
-        ensure_install_location()
-        executable = prepare_payload_with_loading_window()
-        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
-        return 0
-
-    try:
-        root = tk.Tk()
-        root.title("PotteryVolume セットアップ")
-        root.resizable(False, False)
-        root.geometry("520x210")
-        root.attributes("-topmost", True)
-    except tk.TclError:
-        ensure_install_location()
-        executable = prepare_payload_with_loading_window()
-        subprocess.Popen([str(executable), *sys.argv[1:]], cwd=str(executable.parent))
-        return 0
-
-    frame = ttk.Frame(root, padding=20)
-    frame.pack(fill="both", expand=True)
-    ttk.Label(frame, text="インストール先").pack(anchor="w")
-
-    location_row = ttk.Frame(frame)
-    location_row.pack(fill="x", pady=(6, 12))
-    location = tk.StringVar(
-        value=str(Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Programs" / "PotteryVolume")
-    )
-    ttk.Entry(location_row, textvariable=location).pack(side="left", fill="x", expand=True)
-
-    def browse() -> None:
-        selected = filedialog.askdirectory(
-            initialdir=location.get(),
-            title="PotteryVolume のインストール先",
-        )
-        if selected:
-            location.set(selected)
-
-    ttk.Button(location_row, text="参照...", command=browse, width=10).pack(side="right", padx=(8, 0))
-
-    launch_at_end = tk.BooleanVar(value=True)
-    ttk.Checkbutton(
-        frame,
-        text="インストール後にPotteryVolumeを起動する",
-        variable=launch_at_end,
-    ).pack(anchor="w")
-
-    status = tk.StringVar(value="")
-    status_label = ttk.Label(frame, textvariable=status)
-    status_label.pack(fill="x", pady=(10, 4))
-    progress = ttk.Progressbar(frame, mode="indeterminate")
-    progress.pack(fill="x")
-
-    outcome: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
-
-    def install() -> None:
-        install_root = Path(location.get()).expanduser()
-        install_button.configure(state="disabled")
-        status.set("インストール準備中...")
-        progress.start(10)
-        try:
-            install_root.mkdir(parents=True, exist_ok=True)
-            base_root.mkdir(parents=True, exist_ok=True)
-            install_location.write_text(str(install_root), encoding="utf-8")
-            cached_executable = prepare_payload()
-            installed_executable = install_downloaded_payload(cached_executable, install_root)
-            create_installer_shortcuts(installed_executable)
-            outcome.put((True, installed_executable))
-        except (OSError, RuntimeError, urllib.error.URLError, zipfile.BadZipFile) as error:
-            outcome.put((False, error))
-
-    def poll() -> None:
-        if outcome.empty():
-            root.after(100, poll)
-            return
-        succeeded, result = outcome.get()
-        progress.stop()
-        if succeeded and isinstance(result, Path):
-            status.set("インストールが完了しました。")
-            if launch_at_end.get():
-                subprocess.Popen([str(result), *sys.argv[1:]], cwd=str(result.parent))
-            root.after(500, root.destroy)
-        else:
-            install_button.configure(state="normal")
-            if isinstance(result, Exception):
-                status.set(str(result))
-            else:
-                status.set("インストールに失敗しました。")
-
-    install_button = ttk.Button(frame, text="インストール", command=lambda: threading.Thread(target=install, daemon=True).start())
-    install_button.pack(pady=(12, 0))
-    root.after(100, poll)
-    root.mainloop()
-    return 0
-
-
-def prepare_payload() -> Path:
-    version = payload_version()
-    root = cache_root()
-    with preparation_lock(root):
-        try:
-            selected_version = resolve_payload_version(version)
-        except (OSError, TimeoutError, urllib.error.URLError, UnicodeDecodeError, RuntimeError) as lookup_error:
-            if version == "dev":
-                fallback = recorded_release(root)
-                if fallback is not None:
-                    return fallback
-            raise lookup_error
-        payload_dir = root / "payload" / selected_version
-        cached_executable = valid_payload_directory(root, selected_version)
-        if cached_executable is not None:
-            write_release_record(root, selected_version)
-            return cached_executable
-
-        release_base = PAYLOAD_BASE_URL + "/releases/" + selected_version
-        archive = root / f"{PAYLOAD_ZIP_NAME}.{selected_version}.part"
-        checksum = root / f"{PAYLOAD_ZIP_NAME}.{selected_version}.sha256.part"
-        staging = root / "payload" / f".{selected_version}.part"
-
-        download(release_base + "/" + PAYLOAD_ZIP_NAME, archive)
-        download(release_base + "/" + PAYLOAD_ZIP_NAME + ".sha256", checksum)
-
-        try:
-            checksum_metadata = checksum.read_text(encoding="ascii")
-        except UnicodeDecodeError as error:
-            raise RuntimeError("ダウンロードファイルのSHA-256メタデータが不正です。") from error
-        expected = parse_sha256_metadata(checksum_metadata)
-        actual = sha256(archive)
-        if actual != expected:
-            raise RuntimeError("ダウンロードファイルのSHA-256検証に失敗しました。")
-
-        if staging.exists():
-            shutil.rmtree(staging)
-        staging.mkdir(parents=True)
-        safe_extract(archive, staging)
-
-        if payload_dir.exists():
-            shutil.rmtree(payload_dir)
-        staging.rename(payload_dir)
-        archive.unlink(missing_ok=True)
-        checksum.unlink(missing_ok=True)
-
-        executable = payload_dir / "PotteryVolume_gui" / "PotteryVolume_gui.exe"
-        if not executable.is_file():
-            raise RuntimeError("ダウンロードされたアプリにEXEが見つかりませんでした。")
-        (payload_dir / ".ready").write_text(selected_version, encoding="ascii")
-        usable_executable = valid_payload_directory(root, selected_version)
-        if usable_executable is None:
-            raise RuntimeError("ダウンロードされたペイロードの検証に失敗しました。")
-        write_release_record(root, selected_version)
-        return usable_executable
+def parse_launcher_arguments(arguments: list[str]) -> tuple[bool, list[str]]:
+    if arguments == ["--prepare-only"]:
+        return True, []
+    if arguments and arguments[0] == "--":
+        return False, arguments[1:]
+    return False, arguments
 
 
 def main() -> int:
     try:
-        if sys.platform == "win32":
-            return run_installer()
-        executable = prepare_payload_with_loading_window()
+        prepare_only, forwarded_arguments = parse_launcher_arguments(sys.argv[1:])
+        if prepare_only:
+            prepare_payload_with_loading_window()
+            return 0
+
         caller_cwd = Path.cwd()
-        normalized = normalize_forwarded_arguments(sys.argv[1:], caller_cwd)
+        executable = prepare_payload_with_loading_window()
+        normalized = normalize_forwarded_arguments(forwarded_arguments, caller_cwd)
         subprocess.Popen([str(executable), *normalized], cwd=str(executable.parent))
         return 0
-    except (OSError, RuntimeError, urllib.error.URLError, zipfile.BadZipFile) as error:
+    except (
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        UnicodeDecodeError,
+        urllib.error.URLError,
+        zipfile.BadZipFile,
+    ) as error:
         show_error(
-            "PotteryVolumeの実行に必要なファイルをダウンロードできませんでした。\n\n"
-            f"{error}\n\nインターネット接続を確認してください。"
+            "PotteryVolumeの実行に必要なファイルを準備できませんでした。\n\n"
+            f"{error}\n\nネットワーク接続を確認して、もう一度お試しください。"
         )
         return 1
 
