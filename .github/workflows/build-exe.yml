@@ -230,23 +230,25 @@ jobs:
             )
           }
 
-          $pointerFile = Join-Path $env:RUNNER_TEMP "release.txt"
-          Set-Content -Path $pointerFile -Value $version -NoNewline -Encoding ascii
-          $pointerTempUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt"
-          Invoke-Curl @(
-            "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
-            "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
-            "--keepalive-time", "30", "--ftp-create-dirs",
-            "--user", $credentials, "--upload-file", $pointerFile, $pointerTempUrl
-          )
-          Invoke-Curl @(
-            "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
-            "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
-            "--keepalive-time", "30", "--user", $credentials,
-            "--quote", "RNFR /public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt",
-            "--quote", "RNTO /public_html/app/doki/windows/latest/release.txt",
-            "ftp://${hostName}:${port}/"
-          )
+          if ($env:GITHUB_REF -eq "refs/heads/master") {
+            $pointerFile = Join-Path $env:RUNNER_TEMP "release.txt"
+            Set-Content -Path $pointerFile -Value $version -NoNewline -Encoding ascii
+            $pointerTempUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt"
+            Invoke-Curl @(
+              "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
+              "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
+              "--keepalive-time", "30", "--ftp-create-dirs",
+              "--user", $credentials, "--upload-file", $pointerFile, $pointerTempUrl
+            )
+            Invoke-Curl @(
+              "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
+              "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
+              "--keepalive-time", "30", "--user", $credentials,
+              "--quote", "RNFR /public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt",
+              "--quote", "RNTO /public_html/app/doki/windows/latest/release.txt",
+              "ftp://${hostName}:${port}/"
+            )
+          }
 
       - name: Publish installer to GitHub Release
         if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
