@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
         self.update_download_thread: QThread | None = None
         self.update_download_worker: SetupDownloadWorker | None = None
         self.update_progress_dialog: QProgressDialog | None = None
+        self._pending_setup_installer_path: Path | None = None
         self._update_check_manual = False
         self._pending_installer_directory: Path | None = None
         self._settings = QSettings()
@@ -466,6 +467,8 @@ class MainWindow(QMainWindow):
         menu.addAction(self.automatic_updates_action)
 
     def check_updates_on_startup(self) -> None:
+        if sys.platform != "win32":
+            return
         if self.build_commit.lower() == "dev":
             logger.debug("Source execution: automatic update checks are disabled")
             return
@@ -473,6 +476,8 @@ class MainWindow(QMainWindow):
             self._start_update_check(manual=False)
 
     def check_for_updates_manually(self) -> None:
+        if sys.platform != "win32":
+            return
         if self.build_commit.lower() == "dev":
             QMessageBox.information(
                 self,
@@ -556,6 +561,8 @@ class MainWindow(QMainWindow):
             self._settings.setValue("skipped_update_commit", latest_commit)
 
     def _download_update_setup(self, commit: str) -> None:
+        if sys.platform != "win32":
+            return
         if self.update_download_thread is not None:
             return
         self._pending_installer_directory = Path(
@@ -579,15 +586,15 @@ class MainWindow(QMainWindow):
         thread = QThread(self)
         worker = SetupDownloadWorker(commit, destination)
         worker.moveToThread(thread)
-        dialog.canceled.connect(worker.cancel)
+        dialog.canceled.connect(worker.cancel, Qt.ConnectionType.DirectConnection)
         thread.started.connect(worker.run)
         for signal in (worker.finished, worker.failed, worker.cancelled):
             signal.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         worker.progress.connect(self._update_download_progress)
-        worker.finished.connect(self._update_download_finished)
+        worker.finished.connect(self._update_download_ready)
         worker.failed.connect(self._update_download_failed)
         worker.cancelled.connect(self._update_download_cancelled)
-        thread.finished.connect(self._clear_update_download_worker)
+        thread.finished.connect(self._finish_update_download_thread)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self.update_download_thread = thread
@@ -619,7 +626,24 @@ class MainWindow(QMainWindow):
         self.update_download_thread = None
         self.update_download_worker = None
 
+    def _update_download_ready(self, installer_path: Path) -> None:
+        self._pending_setup_installer_path = installer_path
+        thread = self.update_download_thread
+        if thread is None or not thread.isRunning():
+            self._finish_update_download_thread()
+
+    def _finish_update_download_thread(self) -> None:
+        installer_path = self._pending_setup_installer_path
+        self._pending_setup_installer_path = None
+        self._clear_update_download_worker()
+        if installer_path is not None:
+            self._update_download_finished(installer_path)
+
     def _update_download_finished(self, installer_path: Path) -> None:
+        if sys.platform != "win32":
+            self._finish_update_download_dialog()
+            self._remove_pending_installer()
+            return
         self._finish_update_download_dialog()
         # close() returns False when closeEvent rejects the request (for example,
         # while image processing is active), so Setup is never started then.

@@ -218,6 +218,7 @@ def test_hash_failure_never_emits_verified_setup_or_launches_it(
 def test_verified_setup_launches_detached_and_closes_the_gui(
     monkeypatch, tmp_path: Path, qt_widget
 ):
+    monkeypatch.setattr(window_module.sys, "platform", "win32")
     window = MainWindow(None, build_version="0.1.0", build_commit="a" * 40)
     qt_widget(window)
     installer_path = tmp_path / "PotteryVolume-Setup.exe"
@@ -255,6 +256,7 @@ def test_verified_setup_launches_detached_and_closes_the_gui(
 def test_cancelled_close_does_not_start_verified_setup(
     monkeypatch, tmp_path: Path, qt_widget
 ):
+    monkeypatch.setattr(window_module.sys, "platform", "win32")
     window = MainWindow(None, build_version="0.1.0", build_commit="a" * 40)
     qt_widget(window)
     installer_directory = tmp_path / "pending"
@@ -277,6 +279,7 @@ def test_cancelled_close_does_not_start_verified_setup(
 
 
 def test_source_execution_skips_startup_update_check(monkeypatch, qt_widget):
+    monkeypatch.setattr(window_module.sys, "platform", "win32")
     window = MainWindow(None)
     qt_widget(window)
     started: list[bool] = []
@@ -285,3 +288,57 @@ def test_source_execution_skips_startup_update_check(monkeypatch, qt_widget):
     window.check_updates_on_startup()
 
     assert started == []
+
+
+def test_update_checks_and_downloads_are_windows_only(
+    monkeypatch, tmp_path: Path, qt_widget
+):
+    monkeypatch.setattr(window_module.sys, "platform", "linux")
+    window = MainWindow(None, build_version="0.1.0", build_commit="a" * 40)
+    qt_widget(window)
+    started: list[bool] = []
+    launched: list[tuple[object, ...]] = []
+    monkeypatch.setattr(window, "_start_update_check", lambda *, manual: started.append(manual))
+    monkeypatch.setattr(
+        window_module.subprocess, "Popen", lambda *args, **kwargs: launched.append(args)
+    )
+
+    window.check_updates_on_startup()
+    window.check_for_updates_manually()
+    window._download_update_setup("b" * 40)
+    window._update_download_finished(tmp_path / "PotteryVolume-Setup.exe")
+
+    assert started == []
+    assert launched == []
+    assert window.update_download_thread is None
+
+
+def test_verified_setup_waits_until_download_thread_finishes(
+    monkeypatch, tmp_path: Path, qt_widget
+):
+    window = MainWindow(None)
+    qt_widget(window)
+    installer_path = tmp_path / "PotteryVolume-Setup.exe"
+    completed: list[Path] = []
+
+    class DownloadThreadStub:
+        running = True
+
+        def isRunning(self) -> bool:
+            return self.running
+
+    thread = DownloadThreadStub()
+    window.update_download_thread = thread  # type: ignore[assignment]
+    monkeypatch.setattr(window, "_update_download_finished", completed.append)
+
+    window._update_download_ready(installer_path)
+
+    assert completed == []
+    assert window._pending_setup_installer_path == installer_path
+
+    thread.running = False
+    window._finish_update_download_thread()
+
+    assert completed == [installer_path]
+    assert window._pending_setup_installer_path is None
+    assert window.update_download_thread is None
