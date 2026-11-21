@@ -49,4 +49,24 @@ python -m PyInstaller --noconfirm --clean PotteryVolume_gui.spec
 
 ## GitHub Actions
 
-`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。ビルド成功時は、両方の配布フォルダーを `PotteryVolume-Windows-<commit-sha>` というArtifact名でアップロードします。
+`build-exe` ワークフローでは、Python 3.12～3.14 のテストと静的解析がすべて成功してから Windows の `build` ジョブを実行します。前段が失敗した場合、`build` は失敗ではなくスキップになります。PRビルドでは配布ファイルをアップロードせず、ビルドとテストだけを実行します。
+masterまたは`v*`タグビルドでは、ペイロードのFTP公開に成功した場合、
+完全版のZIPとチェックサムをFTPサーバーへのみ公開します。
+`PotteryVolume_bootstrap.exe` と `pottery_volume_bootstrap.py` は
+`v*`タグビルドでのみGitHub Releaseへ添付し、タグ名のReleaseを使用します。
+GUI版の配布フォルダーは `PotteryVolume-GUI-Windows.zip` と
+`PotteryVolume-GUI-Windows.zip.sha256` にまとめます。これらを
+`https://file.ayane0857.net/app/doki/windows/releases/<commit-sha>/` にアップロードしてください。
+両ファイルのアップロード後、同じサーバーの
+`https://file.ayane0857.net/app/doki/windows/latest/release.txt` に公開する
+`<commit-sha>` を1回更新してください。
+
+GitHub Actionsでは、`FTP_HOST`、`FTP_USERNAME`、`FTP_PASSWORD` を
+リポジトリのActions Secretsへ登録すると、masterへのpushまたは手動実行時に
+このディレクトリへFTPで自動アップロードします。ポートが21以外の場合は
+`FTP_PORT` Secretも登録してください。
+
+ローカルで `build_exe.bat` を実行した場合は `BOOTSTRAP_VERSION` が `dev`
+になり、公開済みの最新ペイロードを使用します。ローカル生成したZIPを
+公開URLへ手動でアップロードしなければ、そのコミット向けの公開ペイロードには
+なりません。

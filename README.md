@@ -65,7 +65,9 @@ python -m pip install -r requirements-dev.txt
 
 ## Windows EXE の作成
 
-Windows では `build_exe.bat` を実行するとCLI版とGUI版のアプリフォルダーが作成されます。配布する際は各EXEと `_internal` フォルダーを一緒に配置してください。
+Windows では `build_exe.bat` を実行すると、通常版に加えて小さいブートストラップ版も作成します。
+配布用の通常版は各EXEと `_internal` フォルダーを一緒に配置してください。
+ブートストラップ版は初回起動時にファイルサーバーから通常版を `%LOCALAPPDATA%\PotteryVolume` にダウンロードします。
 
 ~~~text
 dist\PotteryVolume\PotteryVolume.exe
