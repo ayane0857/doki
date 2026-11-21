@@ -97,10 +97,10 @@ jobs:
 
       - name: Prepare online payload
         id: prepare-payload
-        continue-on-error: true
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           python prepare_bootstrap_payload.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $zipHash = (Get-FileHash -Algorithm SHA256 "PotteryVolume-GUI-Windows.zip").Hash.ToLowerInvariant()
@@ -114,7 +114,6 @@ jobs:
 
       - name: Upload online payload by FTP
         id: publish-payload
-        continue-on-error: true
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) && steps.prepare-payload.outcome == 'success'
         shell: pwsh
         env:
@@ -123,6 +122,21 @@ jobs:
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_PORT: ${{ secrets.FTP_PORT }}
         run: |
+          $ErrorActionPreference = "Stop"
+          function Invoke-Curl {
+            param([Parameter(Mandatory)][string[]] $Arguments)
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              & curl.exe @Arguments
+              if ($LASTEXITCODE -eq 0) {
+                return
+              }
+              if ($attempt -lt 5) {
+                Start-Sleep -Seconds (10 * $attempt)
+              }
+            }
+            throw "curl failed after 5 attempts"
+          }
+
           if (-not $env:FTP_HOST -or -not $env:FTP_USERNAME -or -not $env:FTP_PASSWORD) {
             throw "FTP_HOST, FTP_USERNAME, and FTP_PASSWORD secrets are required."
           }
@@ -142,9 +156,9 @@ jobs:
           $remoteZipUrl = "ftp://${hostName}:${port}${releaseDir}/PotteryVolume-GUI-Windows.zip"
           $remoteChecksumUrl = "ftp://${hostName}:${port}${releaseDir}/PotteryVolume-GUI-Windows.zip.sha256"
 
-          & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials --output $remoteZip $remoteZipUrl *> $null
+          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-pasv --retry 5 --retry-delay 10 --retry-all-errors --keepalive-time 30 --user $credentials --output $remoteZip $remoteZipUrl *> $null
           $remoteZipExists = $LASTEXITCODE -eq 0
-          & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials --output $remoteChecksum $remoteChecksumUrl *> $null
+          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-pasv --retry 5 --retry-delay 10 --retry-all-errors --keepalive-time 30 --user $credentials --output $remoteChecksum $remoteChecksumUrl *> $null
           $remoteChecksumExists = $LASTEXITCODE -eq 0
 
           if ($remoteZipExists -or $remoteChecksumExists) {
@@ -171,35 +185,41 @@ jobs:
               "PotteryVolume-GUI-Windows.zip.sha256"
             )) {
               $url = "ftp://${hostName}:${port}${stagingDir}/$fileName"
-              & curl.exe --fail --silent --show-error --ssl-reqd --ftp-create-dirs --user $credentials --upload-file $fileName $url
-              if ($LASTEXITCODE -ne 0) {
-                throw "FTP upload failed: $fileName"
-              }
+              Invoke-Curl @(
+                "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
+                "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
+                "--keepalive-time", "30", "--ftp-create-dirs",
+                "--user", $credentials, "--upload-file", $fileName, $url
+              )
             }
 
-            & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials `
-              --quote "RNFR $stagingDir" `
-              --quote "RNTO $releaseDir" `
+            Invoke-Curl @(
+              "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
+              "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
+              "--keepalive-time", "30", "--user", $credentials,
+              "--quote", "RNFR $stagingDir",
+              "--quote", "RNTO $releaseDir",
               "ftp://${hostName}:${port}/"
-            if ($LASTEXITCODE -ne 0) {
-              throw "FTP publication directory rename failed"
-            }
+            )
           }
 
           $pointerFile = Join-Path $env:RUNNER_TEMP "release.txt"
           Set-Content -Path $pointerFile -Value $version -NoNewline -Encoding ascii
           $pointerTempUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt"
-          & curl.exe --fail --silent --show-error --ssl-reqd --ftp-create-dirs --user $credentials --upload-file $pointerFile $pointerTempUrl
-          if ($LASTEXITCODE -ne 0) {
-            throw "FTP upload failed: temporary release.txt"
-          }
-          & curl.exe --fail --silent --show-error --ssl-reqd --user $credentials `
-            --quote "RNFR /public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt" `
-            --quote "RNTO /public_html/app/doki/windows/latest/release.txt" `
+          Invoke-Curl @(
+            "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
+            "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
+            "--keepalive-time", "30", "--ftp-create-dirs",
+            "--user", $credentials, "--upload-file", $pointerFile, $pointerTempUrl
+          )
+          Invoke-Curl @(
+            "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
+            "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
+            "--keepalive-time", "30", "--user", $credentials,
+            "--quote", "RNFR /public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt",
+            "--quote", "RNTO /public_html/app/doki/windows/latest/release.txt",
             "ftp://${hostName}:${port}/"
-          if ($LASTEXITCODE -ne 0) {
-            throw "FTP pointer rename failed: release.txt"
-          }
+          )
 
       - name: Publish bootstrap files to GitHub Release
         if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
