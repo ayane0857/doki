@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from pottery_scale import (
 )
 from pottery_volume_cli import AnalysisOutput, AnalysisParams, analyze_detailed
 from pottery_volume_core import read_image
+from pottery_volume_updater import download_setup, resolve_latest_release
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,62 @@ class WorkerFailed:
     generation: int
     source: WorkerSource
     summary: str
+
+
+class UpdateCheckWorker(QObject):
+    """Check the latest release without blocking the GUI event loop."""
+
+    finished = Signal(str)
+    failed = Signal(str)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.finished.emit(resolve_latest_release())
+        except Exception as exc:
+            logger.info("Update check failed", exc_info=True)
+            self.failed.emit(str(exc))
+
+
+class SetupDownloadWorker(QObject):
+    """Download and verify the replacement installer in a worker thread."""
+
+    progress = Signal(int, int)
+    finished = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, commit: str, destination: Path) -> None:
+        super().__init__()
+        self.commit = commit
+        self.destination = destination
+        self._cancel_requested = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel_requested.set()
+
+    @Slot()
+    def run(self) -> None:
+        def report_progress(received: int, total: int | None) -> bool:
+            if self._cancel_requested.is_set():
+                return False
+            self.progress.emit(received, total or 0)
+            return True
+
+        try:
+            path = download_setup(
+                self.commit,
+                self.destination,
+                progress=report_progress,
+            )
+        except Exception as exc:
+            if self._cancel_requested.is_set():
+                self.cancelled.emit()
+            else:
+                logger.info("Setup download failed", exc_info=True)
+                self.failed.emit(str(exc))
+        else:
+            self.finished.emit(path)
 
 
 def _error_summary(error: Exception) -> str:

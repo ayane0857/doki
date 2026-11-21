@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import json
 import logging
 import os
 import sys
@@ -18,6 +20,51 @@ from pottery_volume_gui_helpers import (
     build_tsv_row,
     build_tsv_table,
 )
+
+_APPLICATION_MUTEX_HANDLE: Any = None
+_APPLICATION_MUTEX_NAME = r"Local\PotteryVolumeAppMutex"
+
+
+def _retain_application_mutex() -> None:
+    """Keep the named mutex that Inno Setup checks during install/uninstall."""
+    global _APPLICATION_MUTEX_HANDLE
+    if os.name != "nt" or _APPLICATION_MUTEX_HANDLE is not None:
+        return
+    try:
+        loader_name = "WinDLL"
+        kernel32 = getattr(ctypes, loader_name)("kernel32", use_last_error=True)
+        create_mutex = kernel32.CreateMutexW
+        create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        create_mutex.restype = ctypes.c_void_p
+        handle = create_mutex(None, 0, _APPLICATION_MUTEX_NAME)
+        if not handle:
+            raise OSError("CreateMutexW failed")
+        _APPLICATION_MUTEX_HANDLE = handle
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "アプリケーション mutex を作成できません"
+        )
+
+
+def _release_application_mutex() -> None:
+    """Release the mutex just before this process starts its own Setup update."""
+    global _APPLICATION_MUTEX_HANDLE
+    if os.name != "nt" or _APPLICATION_MUTEX_HANDLE is None:
+        return
+    handle = _APPLICATION_MUTEX_HANDLE
+    _APPLICATION_MUTEX_HANDLE = None
+    try:
+        loader_name = "WinDLL"
+        kernel32 = getattr(ctypes, loader_name)("kernel32", use_last_error=True)
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+        if not close_handle(handle):
+            raise OSError("CloseHandle failed")
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "アプリケーション mutex を解放できません"
+        )
 
 
 def _configure_logging() -> Path | None:
@@ -104,8 +151,28 @@ def _install_gui_exception_hook(message_box: Any, log_path: Path | None) -> None
     sys.excepthook = handle_exception
 
 
+def _read_build_info() -> tuple[str, str]:
+    """Read embedded release metadata; source runs intentionally identify as dev."""
+    if not getattr(sys, "frozen", False):
+        return "dev", "dev"
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    try:
+        info = json.loads((bundle_root / "BUILD_INFO.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        logging.getLogger(__name__).exception("Could not read BUILD_INFO.json")
+        return "dev", "dev"
+    version = info.get("version")
+    commit = info.get("commit")
+    if not isinstance(version, str) or not version:
+        version = "dev"
+    if not isinstance(commit, str) or not commit:
+        commit = "dev"
+    return version, commit
+
+
 def launch_gui(initial_image: str | Path | None = None) -> int:
     """Import Qt and open the desktop interface on demand."""
+    _retain_application_mutex()
     log_path = _configure_logging()
     sys.excepthook = _logging_excepthook
 
@@ -117,7 +184,7 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
 
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QSettings, QTimer
 
     from pottery_volume_gui_style import stylesheet_for_theme
     from pottery_volume_gui_window import MainWindow
@@ -142,8 +209,14 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
 
     apply_theme()
     app.styleHints().colorSchemeChanged.connect(apply_theme)
-    window = MainWindow(initial_image)
+    build_version, build_commit = _read_build_info()
+    window = MainWindow(
+        initial_image,
+        build_version=build_version,
+        build_commit=build_commit,
+    )
     window.show()
+    QTimer.singleShot(0, window.check_updates_on_startup)
     return app.exec()
 
 
