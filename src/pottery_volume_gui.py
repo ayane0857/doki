@@ -8,18 +8,33 @@ import logging
 import os
 import sys
 import tempfile
+from importlib import import_module
 from pathlib import Path
+from threading import Thread
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pottery_volume_geometry import pixel_distance
-from pottery_volume_gui_helpers import (
-    GUIArgumentParser,
-    Info,
-    Result,
-    build_tsv_row,
-    build_tsv_table,
-)
+
+if TYPE_CHECKING:
+    from pottery_volume_gui_helpers import (
+        GUIArgumentParser,
+        Info,
+        Result,
+        build_tsv_row,
+        build_tsv_table,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"GUIArgumentParser", "Info", "Result", "build_tsv_row", "build_tsv_table"}:
+        import pottery_volume_gui_helpers
+
+        value = getattr(pottery_volume_gui_helpers, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _APPLICATION_MUTEX_HANDLE: Any = None
 _APPLICATION_MUTEX_NAME = r"Local\PotteryVolumeAppMutex"
@@ -170,22 +185,66 @@ def _read_build_info() -> tuple[str, str]:
     return version, commit
 
 
+def _close_bootloader_splash() -> None:
+    if "_PYI_SPLASH_IPC" in os.environ:
+        import_module("pyi_splash").close()
+
+
+def _preload_analysis_modules() -> None:
+    for name in ("scipy.signal", "shapely.geometry", "shapely.validation", "skimage.measure"):
+        try:
+            import_module(name)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not preload %s", name)
+
+
+def _start_analysis_preload() -> None:
+    Thread(target=_preload_analysis_modules, name="analysis-preload", daemon=True).start()
+
+
 def launch_gui(initial_image: str | Path | None = None) -> int:
     """Import Qt and open the desktop interface on demand."""
     _retain_application_mutex()
     log_path = _configure_logging()
     sys.excepthook = _logging_excepthook
 
+    from PySide6.QtCore import QSettings, Qt, QTimer
     from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
     from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
     instance = QApplication.instance()
     app = instance if isinstance(instance, QApplication) else QApplication(sys.argv)
+    splash_pixmap = QPixmap(520, 260)
+    splash_pixmap.fill(QColor("#1f2937"))
+    painter = QPainter(splash_pixmap)
+    painter.setPen(QColor("#f9fafb"))
+    title_font = QFont()
+    title_font.setPointSize(22)
+    title_font.setBold(True)
+    painter.setFont(title_font)
+    painter.drawText(32, 92, "PotteryVolume")
+    subtitle_font = QFont()
+    subtitle_font.setPointSize(11)
+    painter.setFont(subtitle_font)
+    painter.setPen(QColor("#d1d5db"))
+    painter.drawText(34, 128, "土器体積・容量推定")
+    painter.drawText(34, 204, "起動しています…")
+    painter.end()
+    splash = QSplashScreen(splash_pixmap)
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+    splash.show()
+    app.processEvents()
+    _close_bootloader_splash()
+    splash.showMessage(
+        "表示設定を読み込んでいます…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        QColor("#d1d5db"),
+    )
+    app.processEvents()
+
     app.setApplicationName("PotteryVolume")
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
-
-    from PySide6.QtCore import QSettings, Qt, QTimer
 
     from pottery_volume_gui_style import stylesheet_for_theme
 
@@ -210,25 +269,11 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     apply_theme()
     app.styleHints().colorSchemeChanged.connect(apply_theme)
 
-    splash_pixmap = QPixmap(520, 260)
-    splash_pixmap.fill(QColor("#1f2937"))
-    painter = QPainter(splash_pixmap)
-    painter.setPen(QColor("#f9fafb"))
-    title_font = QFont()
-    title_font.setPointSize(22)
-    title_font.setBold(True)
-    painter.setFont(title_font)
-    painter.drawText(32, 92, "PotteryVolume")
-    subtitle_font = QFont()
-    subtitle_font.setPointSize(11)
-    painter.setFont(subtitle_font)
-    painter.setPen(QColor("#d1d5db"))
-    painter.drawText(34, 128, "土器体積・容量推定")
-    painter.drawText(34, 204, "起動しています…")
-    painter.end()
-    splash = QSplashScreen(splash_pixmap)
-    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-    splash.show()
+    splash.showMessage(
+        "メインウィンドウを準備しています…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        QColor("#d1d5db"),
+    )
     app.processEvents()
 
     from pottery_volume_gui_window import MainWindow
@@ -242,6 +287,7 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     window.show()
     splash.finish(window)
     QTimer.singleShot(0, window.check_updates_on_startup)
+    QTimer.singleShot(300, _start_analysis_preload)
     return app.exec()
 
 

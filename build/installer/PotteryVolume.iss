@@ -64,10 +64,9 @@ Type: filesandordirs; Name: "{app}\.PotteryVolume-backup"
 [Code]
 var
   DownloadPage: TDownloadWizardPage;
-  ReleaseVersion: String;
   StagingRoot: String;
-  PayloadZip: String;
   PreparedPayload: Boolean;
+  UserCancelledDownload: Boolean;
   PayloadReplaced: Boolean;
 
 function IsHexadecimal(const Value: String): Boolean;
@@ -126,26 +125,69 @@ begin
   DownloadPage.ShowBaseNameInsteadOfUrl := True;
 end;
 
+procedure RemoveTemporaryDownload(const FileName: String);
+begin
+  if FileExists(FileName) and not DeleteFile(FileName) then
+    RaiseException('一時ダウンロードを削除できませんでした: ' + FileName);
+end;
+
 function DownloadSmallFile(const Url, BaseName: String): String;
 begin
   if Pos('https://', Lowercase(Url)) <> 1 then
     RaiseException('安全でないダウンロードURLです。');
-  DownloadTemporaryFile(Url, BaseName, '', @OnDownloadProgress);
   Result := ExpandConstant('{tmp}\' + BaseName);
+  RemoveTemporaryDownload(Result);
+  if DownloadTemporaryFile(Url, BaseName, '', @OnDownloadProgress) <= 0 then
+    RaiseException('取得したファイルが空です: ' + BaseName);
 end;
 
-function DownloadAndPreparePayload: String;
+procedure SetPayloadStage(var Stage: String; const Name, Detail: String);
+begin
+  Stage := Name;
+  Log('Payload stage: ' + Stage + ' - ' + Detail);
+end;
+
+function PayloadError(const Stage, Detail: String): String;
+var
+  LogPath: String;
+begin
+  LogPath := ExpandConstant('{log}');
+  if LogPath = '' then
+    LogPath := ExpandConstant('{%TEMP}');
+  Result := 'PotteryVolumeの準備に失敗しました。' + #13#10 + '工程: ' + Stage;
+  if Trim(Detail) <> '' then
+    Result := Result + #13#10 + Detail;
+  Result := Result + #13#10 + 'Setup ログ: ' + LogPath;
+end;
+
+procedure CleanStaging;
+begin
+  PreparedPayload := False;
+  if StagingRoot = '' then
+    Exit;
+  if DirExists(StagingRoot) and not DelTree(StagingRoot, True, True, True) then
+    Log('Could not remove staging directory: ' + StagingRoot)
+  else
+    StagingRoot := '';
+end;
+
+procedure DownloadAndPreparePayload(var Stage: String);
 var
   ReleaseFile: String;
   ChecksumFile: String;
   ReleaseText: AnsiString;
   ChecksumText: AnsiString;
+  ReleaseVersion: String;
   ExpectedHash: String;
   ChecksumUrl: String;
   ZipUrl: String;
+  ZipBaseName: String;
+  PayloadZip: String;
+  NewStagingRoot: String;
   NewGuiDirectory: String;
+  BytesDownloaded: Int64;
 begin
-  Result := '';
+  SetPayloadStage(Stage, 'release.txt の取得', '{#PayloadBaseUrl}/latest/release.txt');
   ReleaseFile := DownloadSmallFile(
     '{#PayloadBaseUrl}/latest/release.txt', 'PotteryVolume-release.txt');
   if not LoadStringFromFile(ReleaseFile, ReleaseText) then
@@ -156,6 +198,7 @@ begin
 
   ChecksumUrl := '{#PayloadBaseUrl}/releases/' + ReleaseVersion +
     '/PotteryVolume-GUI-Windows.zip.sha256';
+  SetPayloadStage(Stage, '.sha256 の取得', ChecksumUrl);
   ChecksumFile := DownloadSmallFile(
     ChecksumUrl, 'PotteryVolume-GUI-' + ReleaseVersion + '.sha256');
   if not LoadStringFromFile(ChecksumFile, ChecksumText) then
@@ -166,67 +209,111 @@ begin
 
   ZipUrl := '{#PayloadBaseUrl}/releases/' + ReleaseVersion +
     '/PotteryVolume-GUI-Windows.zip';
-  PayloadZip := ExpandConstant('{tmp}\PotteryVolume-GUI-' + ReleaseVersion + '.zip');
-  DownloadPage.Clear;
-  DownloadPage.Add(ZipUrl, ExtractFileName(PayloadZip), ExpectedHash);
-  if not WizardSilent then
+  ZipBaseName := 'PotteryVolume-GUI.zip';
+  SetPayloadStage(Stage, 'ZIP の取得・SHA-256 検証', ZipUrl);
+  PayloadZip := ExpandConstant('{tmp}\' + ZipBaseName);
+  RemoveTemporaryDownload(PayloadZip);
+  if WizardSilent then
+    BytesDownloaded := DownloadTemporaryFile(ZipUrl, ZipBaseName, ExpectedHash, @OnDownloadProgress)
+  else begin
+    DownloadPage.Clear;
+    DownloadPage.Add(ZipUrl, ZipBaseName, ExpectedHash);
     DownloadPage.Show;
-  try
-    DownloadPage.Download;
-    if DownloadPage.AbortedByUser then
-      RaiseException('ダウンロードがキャンセルされました。');
-  finally
-    if not WizardSilent then
+    try
+      BytesDownloaded := DownloadPage.Download;
+    finally
+      UserCancelledDownload := DownloadPage.AbortedByUser;
       DownloadPage.Hide;
+    end;
+    if UserCancelledDownload then
+      RaiseException('ダウンロードがキャンセルされました。');
   end;
+  Log('Verified ZIP download bytes: ' + IntToStr(BytesDownloaded));
 
-  StagingRoot := ExpandConstant('{app}\.PotteryVolume-staging');
+  NewStagingRoot := ExpandConstant('{app}\.PotteryVolume-staging');
+  SetPayloadStage(Stage, 'staging の作成', NewStagingRoot);
+  if (StagingRoot <> '') and (CompareText(StagingRoot, NewStagingRoot) <> 0) then
+    RaiseException('以前の一時展開先を削除できませんでした: ' + StagingRoot);
+  StagingRoot := NewStagingRoot;
   if DirExists(StagingRoot) and not DelTree(StagingRoot, True, True, True) then
     RaiseException('前回の一時ファイルを削除できませんでした。');
   if not ForceDirectories(StagingRoot) then
     RaiseException('一時展開先を作成できませんでした。');
+  SetPayloadStage(Stage, 'ZIP の展開', PayloadZip + ' -> ' + StagingRoot);
   ExtractArchive(PayloadZip, StagingRoot, '', True, nil);
   NewGuiDirectory := StagingRoot + '\PotteryVolume_gui';
-  if not FileExists(NewGuiDirectory + '\PotteryVolume_gui.exe') then begin
-    DelTree(StagingRoot, True, True, True);
+  SetPayloadStage(Stage, 'EXE の存在確認', NewGuiDirectory + '\PotteryVolume_gui.exe');
+  if not FileExists(NewGuiDirectory + '\PotteryVolume_gui.exe') then
     RaiseException('ZIPにPotteryVolume_gui.exeがありません。');
-  end;
   PreparedPayload := True;
-  Result := '';
+  Log('Payload preparation complete.');
 end;
 
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+function HasPreparedPayload: Boolean;
+begin
+  Result := PreparedPayload and
+    (CompareText(StagingRoot, ExpandConstant('{app}\.PotteryVolume-staging')) = 0) and
+    FileExists(StagingRoot + '\PotteryVolume_gui\PotteryVolume_gui.exe');
+end;
+
+function PreparePayload: String;
 var
+  Attempt: Integer;
   RetryChoice: Integer;
+  Stage: String;
   ErrorText: String;
 begin
   Result := '';
-  NeedsRestart := False;
-  PreparedPayload := False;
-  PayloadReplaced := False;
+  if HasPreparedPayload then
+    Exit;
+  CleanStaging;
   repeat
-    try
-      Result := DownloadAndPreparePayload;
-      Exit;
-    except
-      ErrorText := GetExceptionMessage;
-      if (StagingRoot <> '') and DirExists(StagingRoot) then
-        DelTree(StagingRoot, True, True, True);
-      Log('Payload preparation failed: ' + ErrorText);
-      if WizardSilent then
-        RetryChoice := MsgBox(
-          'アプリケーションを準備できませんでした。' + #13#10 + ErrorText + #13#10 + #13#10 + 'ダウンロードを再試行しますか？',
-          mbError, MB_RETRYCANCEL);
-      if not WizardSilent then
-        RetryChoice := SuppressibleMsgBox(
-          'アプリケーションを準備できませんでした。' + #13#10 + ErrorText + #13#10 + #13#10 + 'ダウンロードを再試行しますか？',
-          mbError, MB_RETRYCANCEL, IDRETRY);
-      if RetryChoice = IDRETRY then
-        Continue;
-      Result := 'PotteryVolumeをインストールできませんでした。ネットワーク接続を確認して、もう一度お試しください。' + #13#10 + ErrorText;
-      Exit;
+    for Attempt := 1 to 3 do begin
+      Stage := '準備の開始';
+      UserCancelledDownload := False;
+      Log(Format('Payload preparation attempt %d of 3', [Attempt]));
+      try
+        DownloadAndPreparePayload(Stage);
+        Result := '';
+        Exit;
+      except
+        ErrorText := GetExceptionMessage;
+        if UserCancelledDownload then
+          ErrorText := 'ダウンロードがキャンセルされました。';
+        Result := PayloadError(Stage, ErrorText);
+        Log('Payload preparation failed: ' + Result);
+        CleanStaging;
+      end;
+      if UserCancelledDownload then
+        Exit;
     end;
-  until False;
+    RetryChoice := MsgBox(Result + #13#10#13#10 + '準備を再試行しますか？',
+      mbError, MB_RETRYCANCEL);
+  until RetryChoice <> IDRETRY;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpReady) and not WizardSilent then
+    Result := PreparePayload = '';
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  NeedsRestart := False;
+  Result := '';
+  if WizardSilent then
+    Result := PreparePayload
+  else if not HasPreparedPayload then begin
+    Result := PayloadError('EXE の存在確認', '準備済みのアプリケーションがありません。');
+    Log(Result);
+  end;
+end;
+
+procedure DeinitializeSetup;
+begin
+  CleanStaging;
 end;
 
 function SwapPreparedPayload: Boolean;
@@ -255,10 +342,9 @@ begin
     RaiseException('新しいアプリケーションを配置できませんでした。既存版は復元しました。');
   end;
 
-  if HadOldPayload then
-    DelTree(BackupDirectory, True, True, True);
-  DelTree(StagingRoot, True, True, True);
-  PreparedPayload := False;
+  if HadOldPayload and not DelTree(BackupDirectory, True, True, True) then
+    Log('Could not remove backup directory: ' + BackupDirectory);
+  CleanStaging;
   Result := True;
 end;
 
@@ -278,9 +364,10 @@ begin
     except
       ErrorText := GetExceptionMessage;
       Log('Payload replacement failed: ' + ErrorText);
-      SuppressibleMsgBox(
+      if SuppressibleMsgBox(
         'PotteryVolume の更新に失敗しました。' + #13#10 + ErrorText,
-        mbError, MB_OK, IDOK);
+        mbError, MB_OK, IDOK) <> IDOK then
+        Log('Unexpected response to payload replacement error.');
       Abort;
     end;
   end;

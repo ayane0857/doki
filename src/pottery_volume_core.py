@@ -5,15 +5,13 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 import cv2
 import numpy as np
-from scipy.integrate import trapezoid
-from scipy.signal import savgol_filter
-from shapely.geometry import Polygon
-from shapely.validation import explain_validity
-from skimage.measure import label, regionprops
+
+if TYPE_CHECKING:
+    from shapely.geometry import Polygon
 
 
 class VolumeResult(TypedDict):
@@ -94,7 +92,10 @@ def profile_section_polygon(
         (axis_x + float(radius), float(y))
         for y, radius in zip(profiles.y_px, profiles.r_out_px, strict=False)
     ]
-    polygon = Polygon(inner + list(reversed(outer)))
+    from shapely import geometry
+    from shapely.validation import explain_validity
+
+    polygon = geometry.Polygon(inner + list(reversed(outer)))
     if polygon.is_empty or polygon.area <= 0:
         raise ValueError("断面Polygonの面積がありません。")
     if not polygon.is_valid:
@@ -260,6 +261,8 @@ def detect_axis(
 
 def _largest_component(mask: np.ndarray) -> tuple[np.ndarray, list[int]]:
     """Return the largest connected component and the other component sizes."""
+    from skimage.measure import label, regionprops
+
     labels = label(mask > 0, connectivity=2)  # type: ignore[no-untyped-call]
     props = regionprops(labels)  # type: ignore[no-untyped-call]
     if not props:
@@ -278,6 +281,8 @@ def extract_section(
     profile_mode: str = "auto",
 ) -> SectionResult:
     """Close gaps and extract the largest enclosed wall section on the axis's right."""
+    from skimage.measure import label, regionprops
+
     height, width = binary.shape
     # Keep the axis column in the flood-fill ROI: closed section outlines may meet
     # the axis at the vessel foot. Profile extraction excludes that axis stroke.
@@ -392,6 +397,9 @@ def _smooth(values: np.ndarray, window: int) -> np.ndarray:
     )
     if win < 5:
         return values
+
+    from scipy.signal import savgol_filter
+
     return np.asarray(
         savgol_filter(
             values, window_length=win, polyorder=min(2, win - 1), mode="interp"
@@ -544,8 +552,8 @@ def compute_volumes(
         if y_fill[0] > level:
             y_fill = np.r_[level, y_fill]
             rin_fill = np.r_[_profile_at(y, rin, level), rin_fill]
-        capacity_px3 = math.pi * float(trapezoid(rin_fill**2, y_fill))
-    wall_px3 = math.pi * float(trapezoid(rout**2 - rin**2, y))
+        capacity_px3 = math.pi * float(np.trapezoid(rin_fill**2, y_fill))
+    wall_px3 = math.pi * float(np.trapezoid(rout**2 - rin**2, y))
 
     section_polygon = profile_section_polygon(profiles, axis_x)
     area_px2 = float(section_polygon.area)
