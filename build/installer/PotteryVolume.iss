@@ -60,6 +60,7 @@ Filename: "{app}\PotteryVolume_gui\PotteryVolume_gui.exe"; Description: "イン�
 Type: filesandordirs; Name: "{app}\PotteryVolume_gui"
 Type: filesandordirs; Name: "{app}\.PotteryVolume-staging"
 Type: filesandordirs; Name: "{app}\.PotteryVolume-backup"
+Type: dirifempty; Name: "{app}"
 
 [Code]
 var

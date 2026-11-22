@@ -30,7 +30,7 @@ cmd.exe /c build\build_exe.bat
 .\build\build.ps1
 ```
 
-`build/build_exe.bat` は `build/BUILD_INFO.json` を生成し、CLI版とGUI版をPyInstallerでビルドして、GUIフォルダーをZIP化します。`build/prepare_payload.py` はZIP内の `PotteryVolume_gui/` 構成を保ち、ZIPとSHA-256メタデータを作成します。`build/build.ps1` は同じビルド情報を再生成してから `ISCC.exe` を実行します。`AppVersion` は `pyproject.toml` の `project.version` から読みます。コミットは `GITHUB_SHA`、`git rev-parse HEAD`、`dev` の順で決め、GUIに `BUILD_INFO.json` として同梱します。
+`build/build_exe.bat` は `build/BUILD_INFO.json` を生成し、CLI版とGUI版をPyInstallerでビルドして、GUIフォルダーをZIP化します。`build/prepare_payload.py` はZIP内の `PotteryVolume_gui/` 構成を保ち、ZIPとSHA-256メタデータを作成します。`build/build.ps1` は同じビルド情報を再生成してから `ISCC.exe` を実行します。Setup の `AppVersion` と GUI のタイトルに表示する版は、`pyproject.toml` の `project.version` から読みます。リリースタグを作成する前に `project.version` を更新してください。タグ名が `v<project.version>` と一致しないと、タグのビルドは失敗します。コミットは `GITHUB_SHA`、`git rev-parse HEAD`、`dev` の順で決め、GUIに `BUILD_INFO.json` として同梱します。
 
 ```powershell
 ISCC.exe /DAppVersion=0.1.0 /DCommitSha=<40桁のコミットSHA> build\installer\PotteryVolume.iss
@@ -97,7 +97,7 @@ Windows上で確認してください。
 6. **ハッシュ不一致:** テスト用リリースでZIPまたはSetupの `.sha256` を不一致にし、拒否されること、展開・起動されないこと、既存GUIが残ることを確認します。
 7. **GUI起動中の更新:** GUIを複数起動した状態でSetupを開始し、起動時のAppMutex確認で全GUIを手動終了するよう求められることを確認します。すべて閉じて続行し、更新が正常に完了することを確認します。
 8. **Restart Manager:** GUIを閉じた状態でSetupを起動し、起動時のAppMutex確認を通過してからインストール開始前にGUIを起動します。続行後、Restart ManagerがGUIを終了して更新することを別に確認します。
-9. **アンインストール:** GUI起動中のアンインストールを確認後、終了して再度アンインストールします。`PotteryVolume_gui` と staging / backup が削除されることを確認します。
+9. **アンインストール:** GUI起動中のアンインストールを確認後、終了して再度アンインストールし、`PotteryVolume_gui` と staging / backup に加え、空になったインストール先（既定は `%LOCALAPPDATA%\Programs\PotteryVolume`）が削除されることを確認します。別のテストではインストール先の直下に任意のファイルを置き、アンインストール後もそのファイルとフォルダーが残ることを確認します。親の `Programs` フォルダーは削除しません。
 10. **上書きインストール:** 既定のインストール先を変えずにSetupを再実行し、前回のアプリディレクトリとショートカットが維持されて更新されることを確認します。
 11. **通知設定:** 「起動時に更新を確認する」をオフにして再起動し自動確認されないこと、再びオンにすると確認されること、スキップしたコミットが自動通知されず手動確認では表示されることを確認します。
 
