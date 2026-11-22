@@ -29,6 +29,10 @@ def resolve_commit() -> str:
 def main() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         version = tomllib.load(file)["project"]["version"]
+    tag = os.environ.get("GITHUB_REF_NAME", "")
+    if os.environ.get("GITHUB_REF_TYPE") == "tag" and tag != f"v{version}":
+        raise SystemExit(f"Release tag {tag!r} does not match pyproject.toml version {version!r}.")
+
     info = {"version": version, "commit": resolve_commit()}
     (ROOT / "build" / "BUILD_INFO.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

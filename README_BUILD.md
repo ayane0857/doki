@@ -30,7 +30,7 @@ cmd.exe /c build\build_exe.bat
 .\build\build.ps1
 ```
 
-`build/build_exe.bat` は `build/BUILD_INFO.json` を生成し、CLI版とGUI版をPyInstallerでビルドして、GUIフォルダーをZIP化します。`build/prepare_payload.py` はZIP内の `PotteryVolume_gui/` 構成を保ち、ZIPとSHA-256メタデータを作成します。`build/build.ps1` は同じビルド情報を再生成してから `ISCC.exe` を実行します。`AppVersion` は `pyproject.toml` の `project.version` から読みます。コミットは `GITHUB_SHA`、`git rev-parse HEAD`、`dev` の順で決め、GUIに `BUILD_INFO.json` として同梱します。
+`build/build_exe.bat` は `build/BUILD_INFO.json` を生成し、CLI版とGUI版をPyInstallerでビルドして、GUIフォルダーをZIP化します。`build/prepare_payload.py` はZIP内の `PotteryVolume_gui/` 構成を保ち、ZIPとSHA-256メタデータを作成します。`build/build.ps1` は同じビルド情報を再生成してから `ISCC.exe` を実行します。Setup の `AppVersion` と GUI のタイトルに表示する版は、`pyproject.toml` の `project.version` から読みます。リリースタグを作成する前に `project.version` を更新してください。タグ名が `v<project.version>` と一致しないと、タグのビルドは失敗します。コミットは `GITHUB_SHA`、`git rev-parse HEAD`、`dev` の順で決め、GUIに `BUILD_INFO.json` として同梱します。
 
 ```powershell
 ISCC.exe /DAppVersion=0.1.0 /DCommitSha=<40桁のコミットSHA> build\installer\PotteryVolume.iss
