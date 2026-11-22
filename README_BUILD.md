@@ -47,9 +47,26 @@ SetupはGUI ZIPを内包しません。Inno Setupのダウンロード機能で 
 
 ZIP展開にはInno Setupの `ExtractArchive` を採用しました。6.5.0以降の `ArchiveExtraction=full` はZIPを扱い、公式のセキュリティ説明では外部アーカイブの展開に堅牢なWindowsパス検証を適用して悪意あるパスを防ぐとされています。そのため `tar.exe` / PowerShell展開や独自のZIPパス検査を重ねず、標準の展開処理に任せています。[6.5.0の変更履歴](https://jrsoftware.org/files/is6.5-whatsnew.htm)、[アーカイブ展開](https://jrsoftware.org/inno-setup/documentation/topic_isxfunc_extractarchive.htm)、[セキュリティ対策](https://jrsoftware.org/inno-setup/documentation/topic_securitymeasures.htm)
 
-Setupの取得・検証・展開に失敗すると、日本語のエラーを表示して再試行またはキャンセルを選べます。自動更新は `/SILENT` で実行しますが、失敗時の独自エラー・再試行ダイアログは表示します。既存GUIの置き換えは取得・検証・staging展開がすべて成功してから行います。更新時はGUIがSetupを `/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /UPDATE=1` 付きで起動し、Inno Setupが前回のインストール先を使います。サイレント時も `PrepareToInstall` から同じ取得と展開処理を通ります。
+通常インストールでは「インストール準備完了」画面（`wpReady`）で「インストール」を押すと取得・検証・展開を行います。自動更新では `/SILENT` を検出し、`PrepareToInstall` が進捗ページを開かずに同じ処理を行います。[Inno Setup 公式仕様](https://jrsoftware.org/ishelp/topic_scriptevents.htm)では `/SILENT` でも `NextButtonClick` が呼ばれますが、取得処理は二重に実行しません。失敗すると最大3回試行した後、失敗工程と Setup ログのパスを表示して再試行かキャンセルを選べます。Setup ログの既定の保存先は `%TEMP%` です。
+
+既存GUIの置き換えは取得・検証・staging展開がすべて成功してから行います。更新時はGUIがSetupを `/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /UPDATE=1` 付きで起動し、Inno Setupが前回のインストール先を使います。サイレント時も失敗時の独自エラー・再試行ダイアログは表示します。ZIP取得先の `%TEMP%` と、展開先のインストールドライブには、それぞれダウンロードと展開に必要な空き容量が必要です。取得するリリースは実行時に決まるため、Setupの表示容量にはZIPと展開済みGUIのサイズは含まれません。
 
 GUIは `Local\PotteryVolumeAppMutex` という名前付きmutexを保持します。Inno Setupの `AppMutex` が起動時にこのmutexを確認するため、GUI実行中の上書きインストールとアンインストールを検出できます。インストーラー側では `RegisterExtraCloseApplicationsResources` からGUI実行ファイルもRestart Managerへ登録し、Setupのファイル入れ替え時に使用中プロセスを検出します。
+
+### ZIP 展開先のパス長確認
+
+配布用ZIP（またはビルド後の `PotteryVolume_gui` フォルダー）を指定し、最長の相対パスと `{app}\.PotteryVolume-staging` 配下の最長パスを確認できます。`--app-dir` を省略すると、そのWindowsユーザーの既定のインストール先で計測します。従来の `MAX_PATH`（終端のNULを含む260 UTF-16コード単位）に収まらない場合は終了コード `1` になります。
+
+```powershell
+python build\scripts\check_payload_paths.py build\PotteryVolume-GUI-Windows.zip
+python build\scripts\check_payload_paths.py build\dist\PotteryVolume_gui --app-dir 'D:\Apps\PotteryVolume'
+```
+
+## 起動速度（スプラッシュ）の仕組み
+
+- PyInstaller は Tk を利用できる対応環境でのみ、ブートローダーから `build/splash.png` を表示します。Tk が import できない場合はビルド時に警告を出し、GUI 自体は Qt スプラッシュで起動します。
+- GUI は `QApplication` 生成直後に Qt スプラッシュを表示し、ブートローダーのスプラッシュがあれば閉じます。その後、テーマとメインウィンドウを準備し、ウィンドウ表示の約300ミリ秒後に解析ライブラリーを別スレッドで先読みします。`--batch` は Qt を起動せず、CLI を実行します。
+- ディスプレイのない Linux で検証する場合は、`QT_QPA_PLATFORM=offscreen` に加えて `PYINSTALLER_SUPPRESS_SPLASH=1` を設定して Tk のウィンドウを無効にします。Tk 付きのビルドでは、デスクトップ上で Tk → Qt → メインウィンドウへ切り替わることを別に確認します。
 
 ## 公開ファイルと更新フロー
 
@@ -76,7 +93,7 @@ Windows上で確認してください。
 2. **別ドライブ:** `D:\Apps\PotteryVolume` などを選び、ZIPの取得とGUI起動がその場所で成功することを確認します。
 3. **サイレント更新:** インストール済み状態からSetupを `/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /UPDATE=1` で起動し、GUIファイルを更新してからGUIが自動起動することを確認します。
 4. **オフライン時:** GUIを起動したままネットワークを切断します。起動操作が止まらず、更新確認ダイアログが出ないことを確認します。メニューから手動確認した場合は失敗が表示されることも確認します。
-5. **更新中の取得失敗:** ZIPまたはチェックサムのURLを一時的に利用不能にしてSetupを実行します。再試行・キャンセルを選べ、キャンセル時に以前の `PotteryVolume_gui` が残ることを確認します。
+5. **更新中の取得失敗・「インストール準備中」の報告を再確認:** ネットワーク遮断、URL不達、ZIPのみ欠落（テスト用配布先で再現）の各条件でSetupを起動します。「インストール準備完了」から「インストール」を押し、「インストール準備中」に進む場合は「次へ」も押します。ダウンロード失敗時にクラッシュせず、該当する工程名と実在する Setup ログのパスが表示されることを確認します。キャンセル時は以前の `PotteryVolume_gui` が残り、`wpReady` から再実行できることを確認します。接続を戻して再試行し、インストール先を変更した場合も古い staging が使われないことを確認します。サイレント更新でも失敗工程が記録されることを確認します。失敗報告にはエラー全文、`%TEMP%` の Setup ログ、使用した Setup.exe の版を添えてください。
 6. **ハッシュ不一致:** テスト用リリースでZIPまたはSetupの `.sha256` を不一致にし、拒否されること、展開・起動されないこと、既存GUIが残ることを確認します。
 7. **GUI起動中の更新:** GUIを複数起動した状態でSetupを開始し、起動時のAppMutex確認で全GUIを手動終了するよう求められることを確認します。すべて閉じて続行し、更新が正常に完了することを確認します。
 8. **Restart Manager:** GUIを閉じた状態でSetupを起動し、起動時のAppMutex確認を通過してからインストール開始前にGUIを起動します。続行後、Restart ManagerがGUIを終了して更新することを別に確認します。

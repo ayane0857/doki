@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
@@ -11,7 +12,7 @@ datas = [
     (str(ROOT / 'build/BUILD_INFO.json'), '.'),
 ]
 binaries = []
-hiddenimports = []
+hiddenimports = ['pyi_splash']
 tmp_ret = collect_all('rapidocr')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 unused_qt_modules = (
@@ -102,9 +103,27 @@ a.binaries = [item for item in a.binaries if not is_unused_qt_item(item)]
 a.datas = [item for item in a.datas if not is_unused_qt_item(item)]
 pyz = PYZ(a.pure)
 
+splash_targets = []
+splash_binaries = []
+try:
+    import tkinter  # noqa: F401
+except ImportError as exc:
+    print(f'WARNING: PyInstaller splash disabled (tkinter unavailable: {exc})', file=sys.stderr)
+else:
+    if sys.platform != 'darwin':  # Tk must run on the main thread on macOS.
+        splash = Splash(
+            str(ROOT / 'build' / 'splash.png'),
+            a.binaries,
+            a.datas,
+            always_on_top=False,
+        )
+        splash_targets = [splash]
+        splash_binaries = splash.binaries
+
 exe = EXE(
     pyz,
     a.scripts,
+    *splash_targets,
     [],
     exclude_binaries=True,
     name='PotteryVolume_gui',
@@ -123,6 +142,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
+    splash_binaries,
     strip=False,
     upx=False,
     upx_exclude=[],
