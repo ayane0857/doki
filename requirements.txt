@@ -1,5 +1,5 @@
 # Runtime versions verified with CPython 3.14 on Windows x64.
-numpy==2.5.4
+numpy==2.5.5
 opencv-python-headless==5.0.0.93
 scikit-image==0.26.0
 scipy==1.18.1
