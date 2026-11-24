@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-PAYLOAD_BASE_URL = "https://file.ayane0857.net/app/doki/windows"
+GITHUB_REPOSITORY = "ayane0857/doki"
+GITHUB_RELEASES_BASE_URL = f"https://github.com/{GITHUB_REPOSITORY}/releases/download"
+PAYLOAD_BASE_URL = f"{GITHUB_RELEASES_BASE_URL}/latest"
 REQUEST_TIMEOUT_SECONDS = 8
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
 _RELEASE_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
@@ -66,8 +68,8 @@ def parse_release_version(content: str | bytes) -> str:
 
 
 def resolve_latest_release(timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
-    """Fetch latest/release.txt with a short timeout."""
-    url = validate_https_url(f"{PAYLOAD_BASE_URL}/latest/release.txt")
+    """Fetch release.txt from the rolling GitHub latest release."""
+    url = validate_https_url(f"{PAYLOAD_BASE_URL}/PotteryVolume-release.txt")
     with _open_https_url(url, timeout) as response:
         return parse_release_version(response.read(256))
 
@@ -102,10 +104,10 @@ def parse_sha256_metadata(metadata: str | bytes) -> str:
 
 
 def fetch_setup_sha256(commit: str, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
-    """Fetch the checksum metadata for a specific immutable release."""
-    version = parse_release_version(commit)
+    """Fetch Setup.exe checksum metadata from the rolling GitHub release."""
+    parse_release_version(commit)
     url = validate_https_url(
-        f"{PAYLOAD_BASE_URL}/releases/{version}/PotteryVolume-Setup.exe.sha256"
+        f"{PAYLOAD_BASE_URL}/PotteryVolume-Setup.exe.sha256"
     )
     with _open_https_url(url, timeout) as response:
         metadata = response.read(4096)
@@ -120,10 +122,10 @@ def download_setup(
     timeout: float = REQUEST_TIMEOUT_SECONDS,
 ) -> Path:
     """Download a Setup.exe, verify its checksum, then atomically publish it."""
-    version = parse_release_version(commit)
-    expected_hash = fetch_setup_sha256(version, timeout)
+    parse_release_version(commit)
+    expected_hash = fetch_setup_sha256(commit, timeout)
     url = validate_https_url(
-        f"{PAYLOAD_BASE_URL}/releases/{version}/PotteryVolume-Setup.exe"
+        f"{PAYLOAD_BASE_URL}/PotteryVolume-Setup.exe"
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".part")

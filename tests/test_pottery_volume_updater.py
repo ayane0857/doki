@@ -43,7 +43,7 @@ def test_latest_release_uses_short_network_timeout(monkeypatch) -> None:
 
     assert updater.resolve_latest_release() == "a" * 40
     assert requested == {
-        "url": updater.PAYLOAD_BASE_URL + "/latest/release.txt",
+        "url": updater.PAYLOAD_BASE_URL + "/PotteryVolume-release.txt",
         "timeout": updater.REQUEST_TIMEOUT_SECONDS,
     }
     assert updater.REQUEST_TIMEOUT_SECONDS <= 10
@@ -131,8 +131,8 @@ def test_setup_download_streams_verifies_and_replaces_destination(
     assert result == destination
     assert destination.read_bytes() == payload
     assert requested == [
-        f"{updater.PAYLOAD_BASE_URL}/releases/{version}/PotteryVolume-Setup.exe.sha256",
-        f"{updater.PAYLOAD_BASE_URL}/releases/{version}/PotteryVolume-Setup.exe",
+        f"{updater.PAYLOAD_BASE_URL}/PotteryVolume-Setup.exe.sha256",
+        f"{updater.PAYLOAD_BASE_URL}/PotteryVolume-Setup.exe",
     ]
     assert progress[-1] == (len(payload), len(payload))
     assert not destination.with_name(destination.name + ".part").exists()
