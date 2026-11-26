@@ -136,140 +136,64 @@ jobs:
           $setupHash = (Get-FileHash -Algorithm SHA256 $setupPath).Hash.ToLowerInvariant()
           Set-Content -Path "$setupPath.sha256" -Value "$setupHash  PotteryVolume-Setup.exe" -NoNewline -Encoding ascii
 
-      - name: Upload online payload by FTP
+      - name: Publish rolling GitHub Release
         id: publish-payload
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) && steps.prepare-payload.outcome == 'success'
+        if: github.ref == 'refs/heads/master' && steps.prepare-payload.outcome == 'success'
         shell: pwsh
         env:
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
-          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          FTP_PORT: ${{ secrets.FTP_PORT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
-          function Invoke-Curl {
-            param([Parameter(Mandatory)][string[]] $Arguments)
-            for ($attempt = 1; $attempt -le 5; $attempt++) {
-              & curl.exe @Arguments
-              if ($LASTEXITCODE -eq 0) {
-                return
-              }
-              if ($attempt -lt 5) {
-                Start-Sleep -Seconds (10 * $attempt)
-              }
-            }
-            throw "curl failed after 5 attempts"
-          }
-
-          if (-not $env:FTP_HOST -or -not $env:FTP_USERNAME -or -not $env:FTP_PASSWORD) {
-            throw "FTP_HOST, FTP_USERNAME, and FTP_PASSWORD secrets are required."
-          }
-
-          $hostName = $env:FTP_HOST -replace '^ftp://', '' -replace '/+$', ''
-          $port = if ($env:FTP_PORT) { $env:FTP_PORT } else { "21" }
-          $version = "${{ github.sha }}"
-          $releaseDir = "/public_html/app/doki/windows/releases/$version"
-          $releaseParent = "/public_html/app/doki/windows/releases"
-          $stagingName = ".$version.$env:GITHUB_RUN_ID.$env:GITHUB_RUN_ATTEMPT"
-          $stagingDir = "$releaseParent/$stagingName"
-          $pointerUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/release.txt"
-          $credentials = "$($env:FTP_USERNAME):$($env:FTP_PASSWORD)"
-
-          $releaseFiles = @(
-            "PotteryVolume-GUI-Windows.zip",
-            "PotteryVolume-GUI-Windows.zip.sha256",
-            "PotteryVolume-Setup.exe",
-            "PotteryVolume-Setup.exe.sha256"
+          $tag = "latest"
+          $releaseFile = Join-Path $env:RUNNER_TEMP "PotteryVolume-release.txt"
+          Set-Content -Path $releaseFile -Value "${{ github.sha }}" -NoNewline -Encoding ascii
+          $assets = @(
+            "build/PotteryVolume-GUI-Windows.zip",
+            "build/PotteryVolume-GUI-Windows.zip.sha256",
+            "build/dist/PotteryVolume-Setup.exe",
+            "build/dist/PotteryVolume-Setup.exe.sha256",
+            $releaseFile
           )
-          $remoteFiles = @{}
-          $anyRemoteFileExists = $false
-          foreach ($fileName in $releaseFiles) {
-            $remoteFile = Join-Path $env:RUNNER_TEMP "remote-$version-$fileName"
-            $remoteUrl = "ftp://${hostName}:${port}${releaseDir}/$fileName"
-            & curl.exe --fail --silent --show-error --ssl-reqd --ftp-pasv --retry 5 --retry-delay 10 --retry-all-errors --keepalive-time 30 --user $credentials --output $remoteFile $remoteUrl *> $null
-            $remoteFiles[$fileName] = @{ path = $remoteFile; exists = ($LASTEXITCODE -eq 0) }
-            $anyRemoteFileExists = $anyRemoteFileExists -or $remoteFiles[$fileName].exists
-          }
 
-          if ($anyRemoteFileExists) {
-            foreach ($fileName in $releaseFiles) {
-              if (-not $remoteFiles[$fileName].exists) {
-                throw "Immutable release is incomplete: $version ($fileName)"
-              }
-            }
-            foreach ($fileName in @("PotteryVolume-GUI-Windows.zip", "PotteryVolume-Setup.exe")) {
-              $checksumFile = "$fileName.sha256"
-              $remoteHash = (Get-FileHash -Algorithm SHA256 $remoteFiles[$fileName].path).Hash.ToLowerInvariant()
-              $checksumFields = (Get-Content -Raw -Encoding ascii $remoteFiles[$checksumFile].path).Trim().Split()
-              if ($checksumFields.Count -eq 0 -or $checksumFields[0] -notmatch '^[0-9a-fA-F]{64}$') {
-                throw "Immutable release checksum is invalid: $version ($checksumFile)"
-              }
-              if ($remoteHash -ne $checksumFields[0].ToLowerInvariant()) {
-                throw "Immutable release file/checksum mismatch: $version ($fileName)"
-              }
-            }
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag @assets `
+              --title "PotteryVolume latest" `
+              --notes "Rolling Windows build from master. Assets are updated by GitHub Actions." `
+              --target $env:GITHUB_SHA `
+              --prerelease `
+              --repo $env:GITHUB_REPOSITORY
           } else {
-            foreach ($fileName in $releaseFiles) {
-              $url = "ftp://${hostName}:${port}${stagingDir}/$fileName"
-              $localPath = if ($fileName.StartsWith("PotteryVolume-GUI-")) { "build/$fileName" } else { "build/dist/$fileName" }
-              Invoke-Curl @(
-                "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
-                "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
-                "--keepalive-time", "30", "--ftp-create-dirs",
-                "--user", $credentials, "--upload-file", $localPath, $url
-              )
-            }
-
-            Invoke-Curl @(
-              "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
-              "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
-              "--keepalive-time", "30", "--user", $credentials,
-              "--quote", "RNFR $stagingDir",
-              "--quote", "RNTO $releaseDir",
-              "ftp://${hostName}:${port}/"
-            )
+            gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
           }
-
-          if ($env:GITHUB_REF -eq "refs/heads/master") {
-            $pointerFile = Join-Path $env:RUNNER_TEMP "release.txt"
-            Set-Content -Path $pointerFile -Value $version -NoNewline -Encoding ascii
-            $pointerTempUrl = "ftp://${hostName}:${port}/public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt"
-            Invoke-Curl @(
-              "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
-              "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
-              "--keepalive-time", "30", "--ftp-create-dirs",
-              "--user", $credentials, "--upload-file", $pointerFile, $pointerTempUrl
-            )
-            Invoke-Curl @(
-              "--fail", "--silent", "--show-error", "--ssl-reqd", "--ftp-pasv",
-              "--retry", "5", "--retry-delay", "10", "--retry-all-errors",
-              "--keepalive-time", "30", "--user", $credentials,
-              "--quote", "RNFR /public_html/app/doki/windows/latest/.release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.txt",
-              "--quote", "RNTO /public_html/app/doki/windows/latest/release.txt",
-              "ftp://${hostName}:${port}/"
-            )
-          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish installer to GitHub Release
-        if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success' && steps.publish-payload.outcome == 'success'
+        if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = $env:GITHUB_REF_NAME
+          $assets = @(
+            "build/PotteryVolume-GUI-Windows.zip",
+            "build/PotteryVolume-GUI-Windows.zip.sha256",
+            "build/dist/PotteryVolume-Setup.exe",
+            "build/dist/PotteryVolume-Setup.exe.sha256"
+          )
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag `
-              build/dist/PotteryVolume-Setup.exe `
+              $assets `
               --title "PotteryVolume Windows Setup" `
-              --notes "Japanese per-user installer for PotteryVolume. The GUI checks for updates when started." `
+              --notes "Japanese per-user installer and update payload for PotteryVolume." `
               --target $env:GITHUB_SHA `
               --prerelease `
               --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             gh release upload $tag `
-              build/dist/PotteryVolume-Setup.exe `
+              $assets `
               --clobber `
               --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

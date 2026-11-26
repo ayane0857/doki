@@ -10,7 +10,7 @@
   #error JapaneseLanguageFile must be supplied by build.ps1
 #endif
 
-#define PayloadBaseUrl "https://file.ayane0857.net/app/doki/windows"
+#define PayloadBaseUrl "https://github.com/ayane0857/doki/releases/download/latest"
 
 [Setup]
 AppId={{2D8A1936-4F0A-42D1-9F17-3C67A8F5B2E1}
@@ -188,17 +188,16 @@ var
   NewGuiDirectory: String;
   BytesDownloaded: Int64;
 begin
-  SetPayloadStage(Stage, 'release.txt の取得', '{#PayloadBaseUrl}/latest/release.txt');
+  SetPayloadStage(Stage, 'release.txt の取得', '{#PayloadBaseUrl}/PotteryVolume-release.txt');
   ReleaseFile := DownloadSmallFile(
-    '{#PayloadBaseUrl}/latest/release.txt', 'PotteryVolume-release.txt');
+    '{#PayloadBaseUrl}/PotteryVolume-release.txt', 'PotteryVolume-release.txt');
   if not LoadStringFromFile(ReleaseFile, ReleaseText) then
     RaiseException('最新版情報を読み込めませんでした。');
   ReleaseVersion := Lowercase(NormalizeReleaseText(ReleaseText));
   if not IsHexadecimal(ReleaseVersion) or (Length(ReleaseVersion) <> 40) then
     RaiseException('最新版情報のコミットハッシュが不正です。');
 
-  ChecksumUrl := '{#PayloadBaseUrl}/releases/' + ReleaseVersion +
-    '/PotteryVolume-GUI-Windows.zip.sha256';
+  ChecksumUrl := '{#PayloadBaseUrl}/PotteryVolume-GUI-Windows.zip.sha256';
   SetPayloadStage(Stage, '.sha256 の取得', ChecksumUrl);
   ChecksumFile := DownloadSmallFile(
     ChecksumUrl, 'PotteryVolume-GUI-' + ReleaseVersion + '.sha256');
@@ -208,8 +207,7 @@ begin
   if not IsHexadecimal(ExpectedHash) or (Length(ExpectedHash) <> 64) then
     RaiseException('ZIPのSHA-256情報が不正です。');
 
-  ZipUrl := '{#PayloadBaseUrl}/releases/' + ReleaseVersion +
-    '/PotteryVolume-GUI-Windows.zip';
+  ZipUrl := '{#PayloadBaseUrl}/PotteryVolume-GUI-Windows.zip';
   ZipBaseName := 'PotteryVolume-GUI.zip';
   SetPayloadStage(Stage, 'ZIP の取得・SHA-256 検証', ZipUrl);
   PayloadZip := ExpandConstant('{tmp}\' + ZipBaseName);
