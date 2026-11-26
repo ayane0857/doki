@@ -43,7 +43,7 @@ ISCC.exe /DAppVersion=0.1.0 /DCommitSha=<40桁のコミットSHA> build\installe
 - 配布用GUI ZIP: `build/PotteryVolume-GUI-Windows.zip` と `.sha256`
 - インストーラー: `build/dist\PotteryVolume-Setup.exe`
 
-SetupはGUI ZIPを内包しません。Inno Setupのダウンロード機能でGitHub Releaseの `latest/PotteryVolume-release.txt` とZIPの `.sha256` を取得し、`DownloadTemporaryFile` / `CreateDownloadPage` のSHA-256検証付きダウンロードを行います。インストール先の staging に展開してから `{app}\PotteryVolume_gui` に入れ替えます。入れ替えに失敗したときはバックアップから復元します。
+SetupはGUI ZIPを内包しません。Inno Setupのダウンロード機能でGitHub ReleaseのZIP `.sha256` を取得し、`DownloadTemporaryFile` / `CreateDownloadPage` のSHA-256検証付きダウンロードを行います。インストール先の staging に展開してから `{app}\PotteryVolume_gui` に入れ替えます。入れ替えに失敗したときはバックアップから復元します。
 
 ZIP展開にはInno Setupの `ExtractArchive` を採用しました。6.5.0以降の `ArchiveExtraction=full` はZIPを扱い、公式のセキュリティ説明では外部アーカイブの展開に堅牢なWindowsパス検証を適用して悪意あるパスを防ぐとされています。そのため `tar.exe` / PowerShell展開や独自のZIPパス検査を重ねず、標準の展開処理に任せています。[6.5.0の変更履歴](https://jrsoftware.org/files/is6.5-whatsnew.htm)、[アーカイブ展開](https://jrsoftware.org/inno-setup/documentation/topic_isxfunc_extractarchive.htm)、[セキュリティ対策](https://jrsoftware.org/inno-setup/documentation/topic_securitymeasures.htm)
 
@@ -73,16 +73,15 @@ python build\scripts\check_payload_paths.py build\dist\PotteryVolume_gui --app-d
 GitHub Releaseの公開ルートは `https://github.com/ayane0857/doki/releases/download/latest` です。
 
 ```text
-PotteryVolume-release.txt
 PotteryVolume-GUI-Windows.zip
 PotteryVolume-GUI-Windows.zip.sha256
 PotteryVolume-Setup.exe
 PotteryVolume-Setup.exe.sha256
 ```
 
-GUI起動時は8秒のタイムアウトでGitHub Releaseの `PotteryVolume-release.txt` を確認します。新版があれば通知し、「今すぐ更新」「後で」「この版をスキップ」を選べます。スキップしたコミットは `QSettings` に保存されます。Setupは別途ストリーミング取得され、`latest` リリースの `.sha256` と照合してから起動します。オフライン等の自動確認失敗はログに記録し、通知を出しません。「更新を確認…」からの手動確認では最新状態または失敗を表示します。ソース実行と `commit=dev` のビルドでは更新確認を行いません。
+GUI起動時は8秒のタイムアウトでGitHub APIから `latest` タグのコミットを確認します。新版があれば通知し、「今すぐ更新」「後で」「この版をスキップ」を選べます。スキップしたコミットは `QSettings` に保存されます。Setupは別途ストリーミング取得され、`latest` リリースの `.sha256` と照合してから起動します。オフライン等の自動確認失敗はログに記録し、通知を出しません。「更新を確認…」からの手動確認では最新状態または失敗を表示します。ソース実行と `commit=dev` のビルドでは更新確認を行いません。
 
-GitHub Actionsはmasterビルドで、ZIP、ZIPのチェックサム、Setup、Setupのチェックサム、最新コミットを示す `PotteryVolume-release.txt` を更新用のGitHub Release `latest` に公開します。タグビルドではSetupをタグ名のGitHub Releaseにも添付します。公開には `contents: write` と標準の `GITHUB_TOKEN` を使うため、FTPは不要です。
+GitHub Actionsはmasterビルドで、ZIP、ZIPのチェックサム、Setup、Setupのチェックサムを更新用のGitHub Release `latest` に公開します。タグビルドではSetupをタグ名のGitHub Releaseにも添付します。公開には `contents: write` と標準の `GITHUB_TOKEN` を使うため、FTPは不要です。
 
 ## 手動テスト
 

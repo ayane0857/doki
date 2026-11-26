@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import urllib.request
@@ -13,6 +14,9 @@ from urllib.parse import urlparse
 
 GITHUB_REPOSITORY = "ayane0857/doki"
 GITHUB_RELEASES_BASE_URL = f"https://github.com/{GITHUB_REPOSITORY}/releases/download"
+GITHUB_LATEST_COMMIT_API_URL = (
+    f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/latest"
+)
 PAYLOAD_BASE_URL = f"{GITHUB_RELEASES_BASE_URL}/latest"
 REQUEST_TIMEOUT_SECONDS = 8
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
@@ -68,10 +72,19 @@ def parse_release_version(content: str | bytes) -> str:
 
 
 def resolve_latest_release(timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
-    """Fetch release.txt from the rolling GitHub latest release."""
-    url = validate_https_url(f"{PAYLOAD_BASE_URL}/PotteryVolume-release.txt")
+    """Fetch the commit targeted by the rolling GitHub latest tag."""
+    url = validate_https_url(GITHUB_LATEST_COMMIT_API_URL)
     with _open_https_url(url, timeout) as response:
-        return parse_release_version(response.read(256))
+        try:
+            metadata = json.loads(response.read(4096).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise UpdateError("最新版情報の形式が不正です。") from exc
+    if not isinstance(metadata, dict):
+        raise UpdateError("最新版情報の形式が不正です。")
+    sha = metadata.get("sha")
+    if not isinstance(sha, str):
+        raise UpdateError("最新版情報の形式が不正です。")
+    return parse_release_version(sha)
 
 
 def update_available(build_commit: str, latest_commit: str) -> bool:

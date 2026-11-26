@@ -87,11 +87,6 @@ begin
   Result := True;
 end;
 
-function NormalizeReleaseText(const Value: String): String;
-begin
-  Result := Trim(Value);
-end;
-
 function FirstField(const Value: String): String;
 var
   I: Integer;
@@ -174,11 +169,8 @@ end;
 
 procedure DownloadAndPreparePayload(var Stage: String);
 var
-  ReleaseFile: String;
   ChecksumFile: String;
-  ReleaseText: AnsiString;
   ChecksumText: AnsiString;
-  ReleaseVersion: String;
   ExpectedHash: String;
   ChecksumUrl: String;
   ZipUrl: String;
@@ -188,19 +180,10 @@ var
   NewGuiDirectory: String;
   BytesDownloaded: Int64;
 begin
-  SetPayloadStage(Stage, 'release.txt の取得', '{#PayloadBaseUrl}/PotteryVolume-release.txt');
-  ReleaseFile := DownloadSmallFile(
-    '{#PayloadBaseUrl}/PotteryVolume-release.txt', 'PotteryVolume-release.txt');
-  if not LoadStringFromFile(ReleaseFile, ReleaseText) then
-    RaiseException('最新版情報を読み込めませんでした。');
-  ReleaseVersion := Lowercase(NormalizeReleaseText(ReleaseText));
-  if not IsHexadecimal(ReleaseVersion) or (Length(ReleaseVersion) <> 40) then
-    RaiseException('最新版情報のコミットハッシュが不正です。');
-
   ChecksumUrl := '{#PayloadBaseUrl}/PotteryVolume-GUI-Windows.zip.sha256';
   SetPayloadStage(Stage, '.sha256 の取得', ChecksumUrl);
   ChecksumFile := DownloadSmallFile(
-    ChecksumUrl, 'PotteryVolume-GUI-' + ReleaseVersion + '.sha256');
+    ChecksumUrl, 'PotteryVolume-GUI-Windows.zip.sha256');
   if not LoadStringFromFile(ChecksumFile, ChecksumText) then
     RaiseException('ZIPのSHA-256情報を読み込めませんでした。');
   ExpectedHash := Lowercase(FirstField(ChecksumText));

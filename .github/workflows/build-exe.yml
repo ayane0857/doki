@@ -145,14 +145,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "latest"
-          $releaseFile = Join-Path $env:RUNNER_TEMP "PotteryVolume-release.txt"
-          Set-Content -Path $releaseFile -Value "${{ github.sha }}" -NoNewline -Encoding ascii
           $assets = @(
             "build/PotteryVolume-GUI-Windows.zip",
             "build/PotteryVolume-GUI-Windows.zip.sha256",
             "build/dist/PotteryVolume-Setup.exe",
-            "build/dist/PotteryVolume-Setup.exe.sha256",
-            $releaseFile
+            "build/dist/PotteryVolume-Setup.exe.sha256"
           )
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
@@ -164,8 +161,11 @@ jobs:
               --prerelease `
               --repo $env:GITHUB_REPOSITORY
           } else {
+            gh release delete-asset $tag "PotteryVolume-release.txt" --yes --repo $env:GITHUB_REPOSITORY *> $null
             gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
           }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push --force origin "${env:GITHUB_SHA}:refs/tags/latest"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish installer to GitHub Release
