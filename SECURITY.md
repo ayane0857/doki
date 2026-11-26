@@ -11,6 +11,12 @@ PotteryVolume のセキュリティに関する問題をご報告いただきあ
 | 最新の安定版 | 対象 |
 | それ以前のバージョン、プレリリース版 | 対象外 |
 
+## 動作・開発環境
+
+- 必要な Python のバージョンは `3.12` 以上 `3.15` 未満です。
+- GitHub Actions では Ubuntu 上で Python 3.12、3.13、3.14 のテストを実行し、Python 3.14 で静的解析を行います。Windows の GitHub Actions では配布用ビルドを行います。
+- 開発用の依存関係は `python -m pip install -r requirements-dev.txt` でインストールできます。テストは `python -m pytest -q` で実行します。
+
 ## 脆弱性の報告
 
 脆弱性の疑いがある問題は、[GitHub の非公開脆弱性報告](https://github.com/ayane0857/doki/security/advisories/new)からお知らせください。調査が完了する前に、公開 Issue、Discussion、Pull Request へ脆弱性の詳細を書き込まないでください。
