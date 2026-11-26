@@ -13,6 +13,9 @@ from urllib.parse import urlparse
 
 GITHUB_REPOSITORY = "ayane0857/doki"
 GITHUB_RELEASES_BASE_URL = f"https://github.com/{GITHUB_REPOSITORY}/releases/download"
+GITHUB_LATEST_COMMIT_API_URL = (
+    f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/latest"
+)
 PAYLOAD_BASE_URL = f"{GITHUB_RELEASES_BASE_URL}/latest"
 REQUEST_TIMEOUT_SECONDS = 8
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
@@ -39,9 +42,12 @@ def validate_https_url(url: str) -> str:
     return url
 
 
-def _open_https_url(url: str, timeout: float) -> Any:
+def _open_https_url(
+    url: str, timeout: float, *, headers: dict[str, str] | None = None
+) -> Any:
     """Open a URL and reject redirects whose final URL is not HTTPS."""
-    response = urllib.request.urlopen(url, timeout=timeout)
+    request = urllib.request.Request(url, headers=headers) if headers else url
+    response = urllib.request.urlopen(request, timeout=timeout)
     try:
         get_url = getattr(response, "geturl", None)
         if callable(get_url):
@@ -68,9 +74,11 @@ def parse_release_version(content: str | bytes) -> str:
 
 
 def resolve_latest_release(timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
-    """Fetch release.txt from the rolling GitHub latest release."""
-    url = validate_https_url(f"{PAYLOAD_BASE_URL}/PotteryVolume-release.txt")
-    with _open_https_url(url, timeout) as response:
+    """Fetch the commit targeted by the rolling GitHub latest tag."""
+    url = validate_https_url(GITHUB_LATEST_COMMIT_API_URL)
+    with _open_https_url(
+        url, timeout, headers={"Accept": "application/vnd.github.sha"}
+    ) as response:
         return parse_release_version(response.read(256))
 
 

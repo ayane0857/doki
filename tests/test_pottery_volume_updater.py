@@ -35,18 +35,35 @@ def test_release_version_normalizes_hex_case(value, expected: str) -> None:
 def test_latest_release_uses_short_network_timeout(monkeypatch) -> None:
     requested: dict[str, object] = {}
 
-    def fake_urlopen(url: str, timeout: float):
-        requested.update(url=url, timeout=timeout)
+    def fake_urlopen(request, timeout: float):
+        requested.update(
+            url=request.full_url,
+            accept=request.get_header("Accept"),
+            timeout=timeout,
+        )
         return FakeResponse(b"A" * 40)
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
 
     assert updater.resolve_latest_release() == "a" * 40
     assert requested == {
-        "url": updater.PAYLOAD_BASE_URL + "/PotteryVolume-release.txt",
+        "url": updater.GITHUB_LATEST_COMMIT_API_URL,
+        "accept": "application/vnd.github.sha",
         "timeout": updater.REQUEST_TIMEOUT_SECONDS,
     }
     assert updater.REQUEST_TIMEOUT_SECONDS <= 10
+
+
+@pytest.mark.parametrize(
+    "metadata", [b"not-a-sha", b"a" * 39, b"a" * 41, b"\xff"]
+)
+def test_latest_release_rejects_invalid_sha(monkeypatch, metadata: bytes) -> None:
+    monkeypatch.setattr(
+        updater.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse(metadata)
+    )
+
+    with pytest.raises(updater.UpdateError, match="最新版情報"):
+        updater.resolve_latest_release()
 
 
 def test_update_comparison_skips_current_and_dev_builds() -> None:
@@ -77,8 +94,10 @@ def test_non_https_urls_are_rejected() -> None:
             updater.validate_https_url(url)
 
 
-def test_http_payload_base_is_rejected_before_network_access(monkeypatch) -> None:
-    monkeypatch.setattr(updater, "PAYLOAD_BASE_URL", "http://example.com")
+def test_http_latest_commit_url_is_rejected_before_network_access(monkeypatch) -> None:
+    monkeypatch.setattr(
+        updater, "GITHUB_LATEST_COMMIT_API_URL", "http://example.com/latest"
+    )
     monkeypatch.setattr(
         updater.urllib.request,
         "urlopen",
@@ -92,7 +111,7 @@ def test_http_payload_base_is_rejected_before_network_access(monkeypatch) -> Non
 def test_redirect_to_http_is_rejected(monkeypatch) -> None:
     class RedirectedResponse(FakeResponse):
         def geturl(self) -> str:
-            return "http://example.com/release.txt"
+            return "http://example.com/latest"
 
     monkeypatch.setattr(
         updater.urllib.request,
