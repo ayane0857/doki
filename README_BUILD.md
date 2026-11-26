@@ -81,6 +81,8 @@ PotteryVolume-Setup.exe.sha256
 
 GUI起動時は8秒のタイムアウトでGitHub APIから `latest` タグのコミットを確認します。新版があれば通知し、「今すぐ更新」「後で」「この版をスキップ」を選べます。スキップしたコミットは `QSettings` に保存されます。Setupは別途ストリーミング取得され、`latest` リリースの `.sha256` と照合してから起動します。オフライン等の自動確認失敗はログに記録し、通知を出しません。「更新を確認…」からの手動確認では最新状態または失敗を表示します。ソース実行と `commit=dev` のビルドでは更新確認を行いません。
 
+`PotteryVolume-release.txt` を使う旧版は、この移行後に自動更新を確認できなくなります。旧版をご利用の場合は、[GitHub Releases](https://github.com/ayane0857/doki/releases/download/latest/PotteryVolume-Setup.exe) から最新のSetupを手動でダウンロードして実行してください。
+
 GitHub Actionsはmasterビルドで、ZIP、ZIPのチェックサム、Setup、Setupのチェックサムを更新用のGitHub Release `latest` に公開します。タグビルドではSetupをタグ名のGitHub Releaseにも添付します。公開には `contents: write` と標準の `GITHUB_TOKEN` を使うため、FTPは不要です。
 
 ## 手動テスト

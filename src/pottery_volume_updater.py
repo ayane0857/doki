@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import urllib.request
@@ -43,9 +42,12 @@ def validate_https_url(url: str) -> str:
     return url
 
 
-def _open_https_url(url: str, timeout: float) -> Any:
+def _open_https_url(
+    url: str, timeout: float, *, headers: dict[str, str] | None = None
+) -> Any:
     """Open a URL and reject redirects whose final URL is not HTTPS."""
-    response = urllib.request.urlopen(url, timeout=timeout)
+    request = urllib.request.Request(url, headers=headers) if headers else url
+    response = urllib.request.urlopen(request, timeout=timeout)
     try:
         get_url = getattr(response, "geturl", None)
         if callable(get_url):
@@ -74,17 +76,10 @@ def parse_release_version(content: str | bytes) -> str:
 def resolve_latest_release(timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
     """Fetch the commit targeted by the rolling GitHub latest tag."""
     url = validate_https_url(GITHUB_LATEST_COMMIT_API_URL)
-    with _open_https_url(url, timeout) as response:
-        try:
-            metadata = json.loads(response.read(4096).decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise UpdateError("最新版情報の形式が不正です。") from exc
-    if not isinstance(metadata, dict):
-        raise UpdateError("最新版情報の形式が不正です。")
-    sha = metadata.get("sha")
-    if not isinstance(sha, str):
-        raise UpdateError("最新版情報の形式が不正です。")
-    return parse_release_version(sha)
+    with _open_https_url(
+        url, timeout, headers={"Accept": "application/vnd.github.sha"}
+    ) as response:
+        return parse_release_version(response.read(256))
 
 
 def update_available(build_commit: str, latest_commit: str) -> bool:

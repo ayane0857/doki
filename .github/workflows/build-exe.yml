@@ -161,12 +161,22 @@ jobs:
               --prerelease `
               --repo $env:GITHUB_REPOSITORY
           } else {
-            gh release delete-asset $tag "PotteryVolume-release.txt" --yes --repo $env:GITHUB_REPOSITORY *> $null
+            $releaseAssets = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($releaseAssets -contains "PotteryVolume-release.txt") {
+              gh release delete-asset $tag "PotteryVolume-release.txt" --yes --repo $env:GITHUB_REPOSITORY
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git push --force origin "${env:GITHUB_SHA}:refs/tags/latest"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) {
+            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$tag" `
+              -f sha="$env:GITHUB_SHA" `
+              -F force=true
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Publish installer to GitHub Release
         if: github.ref_type == 'tag' && steps.prepare-payload.outcome == 'success'

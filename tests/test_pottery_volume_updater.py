@@ -35,30 +35,29 @@ def test_release_version_normalizes_hex_case(value, expected: str) -> None:
 def test_latest_release_uses_short_network_timeout(monkeypatch) -> None:
     requested: dict[str, object] = {}
 
-    def fake_urlopen(url: str, timeout: float):
-        requested.update(url=url, timeout=timeout)
-        return FakeResponse(b'{"sha":"' + b"A" * 40 + b'"}')
+    def fake_urlopen(request, timeout: float):
+        requested.update(
+            url=request.full_url,
+            accept=request.get_header("Accept"),
+            timeout=timeout,
+        )
+        return FakeResponse(b"A" * 40)
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
 
     assert updater.resolve_latest_release() == "a" * 40
     assert requested == {
         "url": updater.GITHUB_LATEST_COMMIT_API_URL,
+        "accept": "application/vnd.github.sha",
         "timeout": updater.REQUEST_TIMEOUT_SECONDS,
     }
     assert updater.REQUEST_TIMEOUT_SECONDS <= 10
 
 
 @pytest.mark.parametrize(
-    "metadata",
-    [
-        b"not-json",
-        b"[]",
-        b'{"sha":"invalid"}',
-        b'{"sha":null}',
-    ],
+    "metadata", [b"not-a-sha", b"a" * 39, b"a" * 41, b"\xff"]
 )
-def test_latest_release_rejects_invalid_ref_metadata(monkeypatch, metadata: bytes) -> None:
+def test_latest_release_rejects_invalid_sha(monkeypatch, metadata: bytes) -> None:
     monkeypatch.setattr(
         updater.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse(metadata)
     )
@@ -95,7 +94,7 @@ def test_non_https_urls_are_rejected() -> None:
             updater.validate_https_url(url)
 
 
-def test_http_payload_base_is_rejected_before_network_access(monkeypatch) -> None:
+def test_http_latest_commit_url_is_rejected_before_network_access(monkeypatch) -> None:
     monkeypatch.setattr(
         updater, "GITHUB_LATEST_COMMIT_API_URL", "http://example.com/latest"
     )
