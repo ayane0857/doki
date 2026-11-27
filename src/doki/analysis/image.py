@@ -60,11 +60,22 @@ def binarize_image(gray: np.ndarray, adaptive: bool = False) -> tuple[np.ndarray
 
 
 def read_image(path: Path) -> np.ndarray:
-    """Read an image from a Unicode path on Windows and other platforms."""
+    """Read a BGR image from a Unicode path, compositing transparent PNGs on white."""
     try:
         encoded = np.fromfile(path, dtype=np.uint8)
     except OSError as exc:
         raise ValueError(f"画像を読み込めません: {path}") from exc
+    if encoded[:8].tobytes() == b"\x89PNG\r\n\x1a\n":
+        png = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
+        if png is not None and png.ndim == 3 and png.shape[2] == 4:
+            white = np.iinfo(png.dtype).max
+            if np.any(png[:, :, 3] != white):
+                pixels = png.astype(np.uint32)
+                alpha = pixels[:, :, 3:4]
+                bgr = (pixels[:, :, :3] * alpha + white * (white - alpha) + white // 2) // white
+                if png.dtype == np.uint16:
+                    bgr >>= 8
+                return bgr.astype(np.uint8)
     image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"画像を読み込めません: {path}")
