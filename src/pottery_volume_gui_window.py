@@ -1369,8 +1369,12 @@ class MainWindow(QMainWindow):
         analysis_generation = self.analysis_generation
 
         def generate_automatic_profiles(axis_x: float) -> Profiles:
+            contour_mask = output.section.contour_mask
+            if contour_mask is None:
+                contour_mask = output.section.mask
             section = replace(
                 output.section,
+                mask=contour_mask.copy(),
                 warnings=list(output.section.warnings),
             )
             return extract_profiles(
@@ -1433,9 +1437,13 @@ class MainWindow(QMainWindow):
             cast(dict[str, Any], recomputed),
             axis_x_px=corrected_axis_x,
         )
-        output.warnings.append(
-            "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u307e\u305f\u306f\u56de\u8ee2\u8ef8\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
+        correction_warning = (
+            "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u307e\u305f\u306f"
+            "\u56de\u8ee2\u8ef8\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
         )
+        for warning in [*corrected_profiles.warnings, correction_warning]:
+            if warning not in output.warnings:
+                output.warnings.append(warning)
         if output.params.debug_dir:
             try:
                 visualize(

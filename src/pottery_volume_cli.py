@@ -355,6 +355,8 @@ def analyze_detailed(params: AnalysisParams) -> AnalysisOutput:
     section = extract_section(
         binary, axis_x, params.crop, params.closing_kernel, params.profile_mode
     )
+    if section.mode == "lines":
+        section.contour_mask = section.mask.copy()
     profiles = extract_profiles(
         section, axis_x, params.liquid_level_y, params.smooth_window
     )

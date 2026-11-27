@@ -74,6 +74,37 @@ def test_control_point_hit_takes_priority_over_rotation_axis(qt_app: QApplicatio
     dialog.close()
 
 
+def test_add_mode_accepts_points_near_rotation_axis(qt_app: QApplication) -> None:
+    image = np.full((100, 100), 255, dtype=np.uint8)
+    y_px = np.arange(20.0, 81.0)
+    profiles = Profiles(
+        y_px=y_px,
+        r_in_px=np.full(len(y_px), 8.0),
+        r_out_px=np.full(len(y_px), 20.0),
+        top_y_px=20.0,
+        bottom_y_px=80.0,
+        liquid_y_px=20.0,
+    )
+    dialog = ProfileEditorDialog(profiles, image, 30.0, None)
+    dialog.show()
+    qt_app.processEvents()
+
+    canvas = dialog.canvas
+    canvas.scale = 1.0
+    canvas.set_add_mode(True, True)
+    added: list[tuple[float, float, bool]] = []
+    canvas.on_add_point = lambda y, radius, inner: added.append((y, radius, inner))
+    point = canvas._screen(5.0, 50.0, 1.0)
+
+    QTest.mouseClick(
+        canvas, Qt.MouseButton.LeftButton, pos=QPoint(round(point.x()), round(point.y()))
+    )
+
+    assert added == [(50.0, 5.0, True)]
+    assert not canvas._dragging_axis
+    dialog.close()
+
+
 def test_auto_profile_button_replaces_edits_and_can_be_undone(
     qt_app: QApplication,
 ) -> None:

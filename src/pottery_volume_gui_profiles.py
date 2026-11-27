@@ -289,7 +289,7 @@ class ProfileCanvas(QWidget):
                 event.accept()
                 return
         axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
-        if abs(x - axis_screen_x) <= 10:
+        if not self.add_mode and abs(x - axis_screen_x) <= 10:
             self._dragging_axis = True
             self.setCursor(Qt.CursorShape.SizeHorCursor)
             event.accept()

@@ -73,12 +73,13 @@ def test_profile_edit_recomputes_height_calibration_after_axis_change(
         100,
         10,
     )
+    corrected_profiles.warnings.extend(["既存の注意", "補間警告"])
     output = SimpleNamespace(
         params=AnalysisParams(input_path=image_path, vessel_height_mm=120.0),
         result={"input": str(image_path), "axis_x_px": 30.0, "mm_per_px": 2.0},
         section=SimpleNamespace(mask=np.zeros((120, 100), dtype=np.uint8)),
         section_mode="lines",
-        warnings=[],
+        warnings=["既存の注意"],
         image=np.zeros((120, 100), dtype=np.uint8),
         profiles=original_profiles,
         mm_per_px=2.0,
@@ -117,6 +118,75 @@ def test_profile_edit_recomputes_height_calibration_after_axis_change(
     assert output.result["mm_per_px"] == pytest.approx(120.0 / 90.0)
     assert output.result["vessel_height"] == pytest.approx(120.0)
     assert window.axis_edit.text() == "40.00"
+    assert output.warnings.count("既存の注意") == 1
+    assert "補間警告" in output.warnings
+    assert len(output.warnings) == 3
+    assert output.warnings[-1].endswith("を手動補正しました。")
+
+
+def test_automatic_profile_regeneration_uses_original_contour_mask(
+    tmp_path: Path, monkeypatch, qt_widget
+):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from PySide6.QtWidgets import QDialog
+
+    import pottery_volume_gui_window as window_module
+    from pottery_volume_cli import AnalysisParams
+    from pottery_volume_core import Profiles, SectionResult
+
+    window = MainWindow(None)
+    qt_widget(window)
+    image_path = tmp_path / "vessel.png"
+    y_px = np.arange(20.0, 81.0)
+    profiles = Profiles(
+        y_px, np.full(len(y_px), 5.0), np.full(len(y_px), 15.0), 20, 80, 20
+    )
+    contour_mask = np.full((100, 100), 255, dtype=np.uint8)
+    derived_strip = np.zeros((100, 100), dtype=np.uint8)
+    output = SimpleNamespace(
+        params=AnalysisParams(input_path=image_path),
+        result={"input": str(image_path), "axis_x_px": 30.0},
+        section=SectionResult(
+            mask=derived_strip,
+            mode="lines",
+            roi=(0, 0, 100, 100),
+            warnings=[],
+            contour_mask=contour_mask,
+        ),
+        section_mode="lines",
+        warnings=[],
+        image=np.zeros((100, 100), dtype=np.uint8),
+        profiles=profiles,
+        mm_per_px=None,
+    )
+    window.current_analysis = output
+    window.image_edit.setText(str(image_path))
+    captured_masks: list[np.ndarray] = []
+
+    class DialogStub:
+        def __init__(self, *_args, auto_profile_generator, **_kwargs):
+            auto_profile_generator(35.0)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+        def deleteLater(self):
+            pass
+
+    def fake_extract_profiles(section, *_args):
+        captured_masks.append(section.mask.copy())
+        return profiles
+
+    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(window_module, "extract_profiles", fake_extract_profiles)
+
+    window.edit_profiles()
+
+    assert len(captured_masks) == 1
+    np.testing.assert_array_equal(captured_masks[0], contour_mask)
+    np.testing.assert_array_equal(output.section.mask, derived_strip)
 
 
 @pytest.mark.parametrize("stale_change", ["path", "identity", "generation"])
