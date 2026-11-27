@@ -6,8 +6,8 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from pottery_volume_core import Profiles
-from pottery_volume_gui_profiles import ProfileEditorDialog
+from doki.analysis.core import Profiles
+from doki.gui.profile_editor import ProfileEditorDialog
 
 
 def test_rotation_axis_can_be_dragged_and_undone(qt_app: QApplication) -> None:

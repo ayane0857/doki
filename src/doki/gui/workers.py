@@ -9,15 +9,15 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from pottery_scale import (
+from doki.analysis.core import read_image
+from doki.cli import AnalysisOutput, AnalysisParams, analyze_detailed
+from doki.scale.calibration import (
     ScaleBarCandidate,
     ScaleTextCandidate,
     analyze_scale_candidates,
     classify_pottery_and_scale_with_candidates,
 )
-from pottery_volume_cli import AnalysisOutput, AnalysisParams, analyze_detailed
-from pottery_volume_core import read_image
-from pottery_volume_updater import download_setup, resolve_latest_release
+from doki.updater import download_setup, resolve_latest_release
 
 logger = logging.getLogger(__name__)
 

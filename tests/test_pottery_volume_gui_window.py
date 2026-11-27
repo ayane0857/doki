@@ -10,8 +10,8 @@ from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QTableWidgetSelectionRange, QWidget
 
-from pottery_volume_gui_window import HistoryTable, MainWindow
-from pottery_volume_gui_workers import AnalysisFinished, WorkerFailed
+from doki.gui.window.main import HistoryTable, MainWindow
+from doki.gui.workers import AnalysisFinished, WorkerFailed
 
 
 @pytest.fixture
@@ -53,9 +53,9 @@ def test_profile_edit_recomputes_height_calibration_after_axis_change(
     import numpy as np
     from PySide6.QtWidgets import QDialog
 
-    import pottery_volume_gui_window as window_module
-    from pottery_volume_cli import AnalysisParams
-    from pottery_volume_core import Profiles
+    from doki.analysis.core import Profiles
+    from doki.cli import AnalysisParams
+    from doki.gui.window import results as results_module
 
     window = MainWindow(None)
     qt_widget(window)
@@ -108,8 +108,8 @@ def test_profile_edit_recomputes_height_calibration_after_axis_change(
             "vessel_height": (_profiles.bottom_y_px - _profiles.top_y_px) * mm_per_px,
         }
 
-    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
-    monkeypatch.setattr(window_module, "compute_volumes", fake_compute_volumes)
+    monkeypatch.setattr(results_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(results_module, "compute_volumes", fake_compute_volumes)
 
     window.edit_profiles()
 
@@ -132,9 +132,9 @@ def test_automatic_profile_regeneration_uses_original_contour_mask(
     import numpy as np
     from PySide6.QtWidgets import QDialog
 
-    import pottery_volume_gui_window as window_module
-    from pottery_volume_cli import AnalysisParams
-    from pottery_volume_core import Profiles, SectionResult
+    from doki.analysis.core import Profiles, SectionResult
+    from doki.cli import AnalysisParams
+    from doki.gui.window import results as results_module
 
     window = MainWindow(None)
     qt_widget(window)
@@ -179,8 +179,8 @@ def test_automatic_profile_regeneration_uses_original_contour_mask(
         captured_masks.append(section.mask.copy())
         return profiles
 
-    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
-    monkeypatch.setattr(window_module, "extract_profiles", fake_extract_profiles)
+    monkeypatch.setattr(results_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(results_module, "extract_profiles", fake_extract_profiles)
 
     window.edit_profiles()
 
@@ -198,9 +198,9 @@ def test_profile_edit_discards_stale_dialog_results(
     import numpy as np
     from PySide6.QtWidgets import QDialog
 
-    import pottery_volume_gui_window as window_module
-    from pottery_volume_cli import AnalysisParams
-    from pottery_volume_core import Profiles
+    from doki.analysis.core import Profiles
+    from doki.cli import AnalysisParams
+    from doki.gui.window import results as results_module
 
     window = MainWindow(None)
     qt_widget(window)
@@ -246,8 +246,8 @@ def test_profile_edit_discards_stale_dialog_results(
         compute_called = True
         return {}
 
-    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
-    monkeypatch.setattr(window_module, "compute_volumes", fake_compute_volumes)
+    monkeypatch.setattr(results_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(results_module, "compute_volumes", fake_compute_volumes)
 
     window.edit_profiles()
 
@@ -257,7 +257,11 @@ def test_profile_edit_discards_stale_dialog_results(
 
 
 def test_scale_auto_apply_uses_the_confident_label_for_the_selected_bar(tmp_path: Path, qt_widget):
-    from pottery_scale import ScaleBarCandidate, ScaleTextCandidate, associate_label_with_bar
+    from doki.scale.calibration import (
+        ScaleBarCandidate,
+        ScaleTextCandidate,
+        associate_label_with_bar,
+    )
 
     window = MainWindow(None)
     qt_widget(window)
@@ -278,8 +282,8 @@ def test_scale_auto_apply_uses_the_confident_label_for_the_selected_bar(tmp_path
 
 
 def test_applied_mm_precision_still_matches_ocr_label_in_dialog(qt_widget):
-    from pottery_scale import ScaleBarCandidate, ScaleTextCandidate
-    from pottery_volume_gui_scale import ScaleCalibrationDialog
+    from doki.gui.scale_dialog import ScaleCalibrationDialog
+    from doki.scale.calibration import ScaleBarCandidate, ScaleTextCandidate
 
     window = MainWindow(None)
     qt_widget(window)
@@ -312,9 +316,9 @@ def test_applied_mm_precision_still_matches_ocr_label_in_dialog(qt_widget):
 
 
 def test_scale_dialog_keeps_applied_pair_until_label_is_explicitly_changed(monkeypatch, qt_widget):
-    import pottery_volume_gui_scale as scale_dialog_module
-    from pottery_scale import ScaleBarCandidate, ScaleTextCandidate
-    from pottery_volume_gui_scale import ScaleCalibrationDialog
+    import doki.gui.scale_dialog as scale_dialog_module
+    from doki.gui.scale_dialog import ScaleCalibrationDialog
+    from doki.scale.calibration import ScaleBarCandidate, ScaleTextCandidate
 
     image_path = Path(__file__).parent / "fixtures" / "scale_image.png"
     label_5cm = ScaleTextCandidate("5cm", 5, "cm", 50, 0.90, (30, 30, 70, 50))
@@ -352,8 +356,8 @@ def test_scale_dialog_keeps_applied_pair_until_label_is_explicitly_changed(monke
 
 
 def test_scale_dialog_offers_keep_current_when_no_ocr_length_matches(qt_widget):
-    from pottery_scale import ScaleBarCandidate, ScaleTextCandidate
-    from pottery_volume_gui_scale import ScaleCalibrationDialog
+    from doki.gui.scale_dialog import ScaleCalibrationDialog
+    from doki.scale.calibration import ScaleBarCandidate, ScaleTextCandidate
 
     image_path = Path(__file__).parent / "fixtures" / "scale_image.png"
     label_5cm = ScaleTextCandidate("5cm", 5, "cm", 50, 0.90, (30, 30, 70, 50))
@@ -385,9 +389,9 @@ def test_scale_dialog_offers_keep_current_when_no_ocr_length_matches(qt_widget):
 def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch, qt_widget):
     from PySide6.QtWidgets import QDialog
 
-    import pottery_volume_gui_window as window_module
-    from pottery_scale import ScaleBarCandidate, ScaleTextCandidate
-    from pottery_volume_gui_scale import ScaleCalibrationDialog
+    from doki.gui.scale_dialog import ScaleCalibrationDialog
+    from doki.gui.window import inputs as inputs_module
+    from doki.scale.calibration import ScaleBarCandidate, ScaleTextCandidate
 
     window = MainWindow(None)
     qt_widget(window)
@@ -438,7 +442,7 @@ def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch, qt_widget
         def deleteLater(self):
             pass
 
-    monkeypatch.setattr(window_module, "ScaleCalibrationDialog", DialogStub)
+    monkeypatch.setattr(inputs_module, "ScaleCalibrationDialog", DialogStub)
     window.scale_image_edit.setText(str(image_path))
     window.scale_labels = [label_5cm, label_10cm]
     window.scale_bars = [automatic_bar, corrected_bar]
@@ -488,8 +492,8 @@ def test_measure_scale_passes_applied_pair_for_same_image(monkeypatch, qt_widget
 def test_manual_endpoints_persist_on_reopen_without_detected_candidates(monkeypatch, qt_widget):
     from PySide6.QtWidgets import QDialog
 
-    import pottery_volume_gui_window as window_module
-    from pottery_volume_gui_scale import ScaleCalibrationDialog
+    from doki.gui.scale_dialog import ScaleCalibrationDialog
+    from doki.gui.window import inputs as inputs_module
 
     window = MainWindow(None)
     qt_widget(window)
@@ -523,7 +527,7 @@ def test_manual_endpoints_persist_on_reopen_without_detected_candidates(monkeypa
         def deleteLater(self):
             pass
 
-    monkeypatch.setattr(window_module, "ScaleCalibrationDialog", DialogStub)
+    monkeypatch.setattr(inputs_module, "ScaleCalibrationDialog", DialogStub)
     window.scale_image_edit.setText(str(image_path))
     window.known_mm_edit.setText("100")
 
@@ -558,8 +562,8 @@ def test_stale_dialog_does_not_overwrite_new_detection_state(
 ):
     from PySide6.QtWidgets import QDialog
 
-    import pottery_volume_gui_window as window_module
-    from pottery_scale import ScaleBarCandidate, ScaleTextCandidate
+    from doki.gui.window import inputs as inputs_module
+    from doki.scale.calibration import ScaleBarCandidate, ScaleTextCandidate
 
     window = MainWindow(None)
     qt_widget(window)
@@ -588,7 +592,7 @@ def test_stale_dialog_does_not_overwrite_new_detection_state(
         def deleteLater(self):
             pass
 
-    monkeypatch.setattr(window_module, "ScaleCalibrationDialog", DialogStub)
+    monkeypatch.setattr(inputs_module, "ScaleCalibrationDialog", DialogStub)
     window.scale_image_edit.setText(str(image_path))
     window.scale_labels = [old_label]
     window.scale_bars = [old_bar, stale_bar]

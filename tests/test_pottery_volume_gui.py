@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from pottery_volume_gui import _configure_logging, _install_gui_exception_hook
+from doki.gui.app import _configure_logging, _install_gui_exception_hook
 
 
 def test_unhandled_exception_is_logged_and_shown(tmp_path: Path, monkeypatch) -> None:

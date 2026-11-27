@@ -8,8 +8,11 @@ import cv2
 import numpy as np
 import pytest
 
-import pottery_scale
-from pottery_scale import (
+from doki.analysis.core import read_image
+from doki.scale import calibration
+from doki.scale import detection as scale_detection
+from doki.scale import rails as scale_rails
+from doki.scale.calibration import (
     ScaleBarCandidate,
     ScaleTextCandidate,
     analyze_scale_candidates,
@@ -21,7 +24,6 @@ from pottery_scale import (
     parse_metric_length,
     rank_scale_bars,
 )
-from pottery_volume_core import read_image
 
 
 def _raw_rail(
@@ -88,7 +90,7 @@ def test_stack_rails_merges_only_with_connecting_strokes(connector_xs):
         cv2.line(mask, (x, 20), (x, 40), 255, 1)
     rails = [(20.0, 220.0, 20.0, 1.0, 0.9), (20.0, 220.0, 40.0, 1.0, 0.9)]
 
-    stacked = pottery_scale._stack_rails(rails, mask)
+    stacked = calibration._stack_rails(rails, mask)
 
     assert len(stacked) == (1 if connector_xs else 2)
 
@@ -100,15 +102,15 @@ def test_stack_rails_rejects_high_occupancy_with_a_blank_gap():
     cv2.line(mask, (120, 22), (120, 28), 255, 1)
     rails = [(20.0, 220.0, 20.0, 1.0, 0.9), (20.0, 220.0, 30.0, 1.0, 0.9)]
 
-    assert len(pottery_scale._stack_rails(rails, mask)) == 2
+    assert len(calibration._stack_rails(rails, mask)) == 2
 
 
 def test_detector_skips_skew_preview_with_zero_rounded_height(monkeypatch):
     image = np.full((15, 40_000, 3), 255, dtype=np.uint8)
     preview_source_shapes = []
-    original_estimate_skew = pottery_scale._estimate_skew
+    original_estimate_skew = scale_detection._estimate_skew
     monkeypatch.setattr(
-        pottery_scale,
+        scale_detection,
         "_dark_mask",
         lambda gray: np.zeros(gray.shape[:2], dtype=np.uint8),
     )
@@ -117,9 +119,9 @@ def test_detector_skips_skew_preview_with_zero_rounded_height(monkeypatch):
         preview_source_shapes.append(mask.shape[:2])
         return original_estimate_skew(mask)
 
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", estimate_skew)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", estimate_skew)
     monkeypatch.setattr(
-        pottery_scale, "_detect_in_aligned_mask", lambda _mask, _min_length: []
+        scale_detection, "_detect_in_aligned_mask", lambda _mask, _min_length: []
     )
 
     assert detect_horizontal_scale_bars(image) == []
@@ -131,7 +133,7 @@ def test_detector_skips_skew_preview_with_zero_rounded_height(monkeypatch):
 def test_detector_skips_resize_when_scaled_crop_dimension_is_zero(monkeypatch):
     image = np.full((8, 100_000, 3), 255, dtype=np.uint8)
     monkeypatch.setattr(
-        pottery_scale.cv2,
+        scale_detection.cv2,
         "resize",
         lambda *_args, **_kwargs: pytest.fail("resize called for a zero-sized crop"),
     )
@@ -155,8 +157,8 @@ def test_detector_filters_text_before_applying_limit_and_keeps_usable_first_pass
         min_lengths.append(min_length)
         return raw
 
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", lambda _mask: 0.0)
-    monkeypatch.setattr(pottery_scale, "_detect_in_aligned_mask", detect)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", lambda _mask: 0.0)
+    monkeypatch.setattr(scale_detection, "_detect_in_aligned_mask", detect)
 
     bars = detect_horizontal_scale_bars(image, limit=1, labels=[label])
 
@@ -178,8 +180,8 @@ def test_detector_retries_shorter_pass_when_text_filter_removes_all_candidates(
         min_lengths.append(min_length)
         return [text_rail] if len(min_lengths) == 1 else [valid_rail]
 
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", lambda _mask: 0.0)
-    monkeypatch.setattr(pottery_scale, "_detect_in_aligned_mask", detect)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", lambda _mask: 0.0)
+    monkeypatch.setattr(scale_detection, "_detect_in_aligned_mask", detect)
 
     bars = detect_horizontal_scale_bars(image, limit=1, labels=[label])
 
@@ -202,8 +204,8 @@ def test_detector_merges_weak_first_pass_with_shorter_pass_and_deduplicates(
         min_lengths.append(min_length)
         return passes[len(min_lengths) - 1]
 
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", lambda _mask: 0.0)
-    monkeypatch.setattr(pottery_scale, "_detect_in_aligned_mask", detect)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", lambda _mask: 0.0)
+    monkeypatch.setattr(scale_detection, "_detect_in_aligned_mask", detect)
 
     bars = detect_horizontal_scale_bars(image)
 
@@ -227,8 +229,8 @@ def test_detector_checks_label_match_before_stopping_after_strong_first_pass(
         min_lengths.append(min_length)
         return passes[len(min_lengths) - 1]
 
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", lambda _mask: 0.0)
-    monkeypatch.setattr(pottery_scale, "_detect_in_aligned_mask", detect)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", lambda _mask: 0.0)
+    monkeypatch.setattr(scale_detection, "_detect_in_aligned_mask", detect)
 
     bars = detect_horizontal_scale_bars(image, labels=[label])
 
@@ -278,11 +280,11 @@ def test_close_rails_with_separate_endpoint_ticks_both_reach_matching(monkeypatc
         (20.0, 220.0, 53.0, 1.0, 1.0),
     ]
     ticks = [(20.0, 42.0, 48.0), (220.0, 55.0, 63.0)]
-    monkeypatch.setattr(pottery_scale, "_find_rails", lambda _mask, _min: rails)
-    monkeypatch.setattr(pottery_scale, "_find_ticks", lambda _mask: ticks)
+    monkeypatch.setattr(scale_rails, "_find_rails", lambda _mask, _min: rails)
+    monkeypatch.setattr(scale_rails, "_find_ticks", lambda _mask: ticks)
     label = ScaleTextCandidate("10cm", 10, "cm", 100, 0.99, (15, 25, 55, 35))
 
-    raw_bars = pottery_scale._detect_in_aligned_mask(mask, 24)
+    raw_bars = scale_rails._detect_in_aligned_mask(mask, 24)
     bars = [
         ScaleBarCandidate(x1, y, x2, y, confidence, tick_support)
         for x1, x2, y, confidence, _thickness, tick_support in raw_bars
@@ -293,9 +295,9 @@ def test_close_rails_with_separate_endpoint_ticks_both_reach_matching(monkeypatc
     assert all(bar.confidence >= 0.80 for bar in bars)
     assert find_confident_scale_match([label], bars) is None
 
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", lambda _mask: 0.0)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", lambda _mask: 0.0)
     monkeypatch.setattr(
-        pottery_scale, "_detect_in_aligned_mask", lambda _mask, _min: raw_bars
+        scale_detection, "_detect_in_aligned_mask", lambda _mask, _min: raw_bars
     )
     detected = detect_horizontal_scale_bars(
         np.full(mask.shape, 255, dtype=np.uint8), labels=[label]
@@ -336,14 +338,14 @@ def test_analyze_scale_candidates_reranks_original_bars_and_reassociates_label(
         return [bar_near_10cm, bar_near_5cm]
 
     monkeypatch.setattr(
-        pottery_scale, "recognize_scale_text", lambda _image: [label_10cm, label_5cm]
+        calibration, "recognize_scale_text", lambda _image: [label_10cm, label_5cm]
     )
     monkeypatch.setattr(
-        pottery_scale,
+        calibration,
         "detect_horizontal_scale_bars",
         lambda _image, labels=None: detected_bars,
     )
-    monkeypatch.setattr(pottery_scale, "rank_scale_bars", rank)
+    monkeypatch.setattr(calibration, "rank_scale_bars", rank)
 
     labels, bars = analyze_scale_candidates(np.zeros((100, 500), dtype=np.uint8))
 
@@ -361,12 +363,12 @@ def test_analyze_scale_candidates_keeps_first_ranking_when_label_is_unchanged(
     label = ScaleTextCandidate("10cm", 10, "cm", 100, 0.99, (30, 20, 70, 40))
     bar = ScaleBarCandidate(30, 60, 230, 60, 0.90, 1)
     rank_calls = []
-    monkeypatch.setattr(pottery_scale, "recognize_scale_text", lambda _image: [label])
+    monkeypatch.setattr(calibration, "recognize_scale_text", lambda _image: [label])
     monkeypatch.setattr(
-        pottery_scale, "detect_horizontal_scale_bars", lambda _image, labels=None: [bar]
+        calibration, "detect_horizontal_scale_bars", lambda _image, labels=None: [bar]
     )
     monkeypatch.setattr(
-        pottery_scale,
+        calibration,
         "rank_scale_bars",
         lambda bars, _label, _shape: (rank_calls.append(list(bars)) or [bar]),
     )
@@ -390,7 +392,7 @@ def test_confident_match_returns_supported_label_not_promoted_low_confidence_lab
     label_5cm = ScaleTextCandidate("5cm", 5, "cm", 50, 0.59, (190, 50, 220, 70))
     label_10cm = ScaleTextCandidate("10cm", 10, "cm", 100, 0.95, (260, 50, 300, 70))
     bar = ScaleBarCandidate(20, 60, 220, 60, 0.95, 1)
-    labels = pottery_scale.associate_label_with_bar([label_10cm, label_5cm], bar)
+    labels = calibration.associate_label_with_bar([label_10cm, label_5cm], bar)
 
     assert labels[0] == label_5cm
     assert find_confident_scale_match(labels, [bar]) == (label_10cm, bar)
@@ -402,7 +404,7 @@ def test_one_endpoint_rail_with_nearby_label_is_confident(monkeypatch):
     cv2.line(image, (60, 90), (260, 90), (0, 0, 0), 2)
     cv2.line(image, (60, 78), (60, 102), (0, 0, 0), 2)
     label = ScaleTextCandidate("10cm", 10, "cm", 100, 0.99, (15, 45, 55, 65))
-    monkeypatch.setattr(pottery_scale, "_estimate_skew", lambda _mask: 0.0)
+    monkeypatch.setattr(scale_detection, "_estimate_skew", lambda _mask: 0.0)
 
     bars = detect_horizontal_scale_bars(image, labels=[label])
     match = find_confident_scale_match([label], bars)
@@ -450,9 +452,9 @@ def test_extract_scale_from_image_calculates_mm_per_pixel(monkeypatch):
     label_5cm = ScaleTextCandidate("5cm", 5, "cm", 50, 0.59, (190, 50, 220, 70))
     label_10cm = ScaleTextCandidate("10cm", 10, "cm", 100, 0.95, (260, 50, 300, 70))
     bar = ScaleBarCandidate(20, 60, 220, 60, 0.95, 1)
-    labels = pottery_scale.associate_label_with_bar([label_10cm, label_5cm], bar)
+    labels = calibration.associate_label_with_bar([label_10cm, label_5cm], bar)
     monkeypatch.setattr(
-        pottery_scale,
+        calibration,
         "analyze_scale_candidates",
         lambda _image: (labels, [bar]),
     )

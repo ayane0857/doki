@@ -6,14 +6,14 @@ import math
 
 import pytest
 
-from pottery_volume_geometry import pixel_distance
-from pottery_volume_gui_helpers import (
+from doki.analysis.geometry import pixel_distance
+from doki.gui.helpers import (
     GUIArgumentParser,
     _format_value,
     build_tsv_row,
     build_tsv_table,
 )
-from pottery_volume_gui_helpers import (
+from doki.gui.helpers import (
     pixel_distance as helper_pixel_distance,
 )
 

@@ -11,13 +11,13 @@ import pytest
     "module, forbidden",
     [
         (
-            "pottery_volume_gui",
+            "doki.gui.app",
             (
                 "numpy", "cv2", "scipy", "skimage", "shapely", "matplotlib",
-                "pottery_volume_core", "pottery_volume_cli", "pottery_volume_gui_helpers",
+                "doki.analysis.core", "doki.cli", "doki.gui.helpers",
             ),
         ),
-        ("pottery_volume_core", ("scipy", "shapely", "skimage")),
+        ("doki.analysis.core", ("scipy", "shapely", "skimage")),
     ],
 )
 def test_startup_imports(module: str, forbidden: tuple[str, ...]) -> None:
@@ -25,16 +25,18 @@ def test_startup_imports(module: str, forbidden: tuple[str, ...]) -> None:
         import sys
         import {module}
 
-        loaded = {{name for name in sys.modules if name.partition('.')[0] in {forbidden!r}}}
+        forbidden = {forbidden!r}
+        prefixes = tuple(name + '.' for name in forbidden)
+        loaded = {{name for name in sys.modules if name in forbidden or name.startswith(prefixes)}}
         assert not loaded, sorted(loaded)
     """)
 
 
 def test_lazy_gui_reexports() -> None:
     _run_python("""
-        from pottery_volume_gui import GUIArgumentParser
-        import pottery_volume_gui as gui
-        import pottery_volume_gui_helpers as helpers
+        from doki.gui.app import GUIArgumentParser
+        import doki.gui.app as gui
+        import doki.gui.helpers as helpers
 
         assert GUIArgumentParser is helpers.GUIArgumentParser
         for name in ('Info', 'Result', 'build_tsv_row', 'build_tsv_table'):

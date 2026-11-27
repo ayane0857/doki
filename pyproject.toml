@@ -30,22 +30,12 @@ dev = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = [
-    "pottery_volume",
-    "pottery_volume_cli",
-    "pottery_volume_core",
-    "pottery_volume_geometry",
-    "pottery_scale",
-    "pottery_volume_gui",
-    "pottery_volume_gui_helpers",
-    "pottery_volume_gui_qt",
-    "pottery_volume_gui_workers",
-    "pottery_volume_gui_window",
-    "pottery_volume_gui_profiles",
-    "pottery_volume_gui_scale",
-    "pottery_volume_gui_style",
-    "pottery_volume_updater",
-]
+py-modules = ["pottery_volume", "pottery_volume_cli"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["doki", "doki.*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -61,22 +51,7 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "basic"
-include = [
-    "src/pottery_volume.py",
-    "src/pottery_volume_cli.py",
-    "src/pottery_volume_core.py",
-    "src/pottery_volume_geometry.py",
-    "src/pottery_scale.py",
-    "src/pottery_volume_gui.py",
-    "src/pottery_volume_gui_helpers.py",
-    "src/pottery_volume_gui_qt.py",
-    "src/pottery_volume_gui_workers.py",
-    "src/pottery_volume_gui_window.py",
-    "src/pottery_volume_gui_profiles.py",
-    "src/pottery_volume_gui_scale.py",
-    "src/pottery_volume_gui_style.py",
-    "src/pottery_volume_updater.py",
-]
+include = ["src"]
 exclude = ["build", "dist", ".venv", ".venv-build", "tests"]
 reportMissingTypeStubs = false
 reportUnsupportedDunderAll = false
@@ -84,13 +59,12 @@ reportUnsupportedDunderAll = false
 [tool.mypy]
 python_version = "3.14"
 files = [
-    "src/pottery_volume_geometry.py",
-    "src/pottery_volume_core.py",
-    "src/pottery_volume_gui_helpers.py",
-    "src/pottery_volume_gui_workers.py",
-    "src/pottery_volume_updater.py",
-    "src/pottery_scale.py",
-    "src/pottery_volume_cli.py",
+    "src/doki/analysis",
+    "src/doki/scale",
+    "src/doki/cli.py",
+    "src/doki/gui/helpers.py",
+    "src/doki/gui/workers.py",
+    "src/doki/updater.py",
 ]
 follow_imports = "silent"
 ignore_missing_imports = true
@@ -98,10 +72,10 @@ check_untyped_defs = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["pottery_volume_geometry", "pottery_volume_gui_helpers"]
+module = ["doki.analysis.geometry", "doki.gui.helpers"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pottery_volume_gui_workers"]
+module = ["doki.gui.workers"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

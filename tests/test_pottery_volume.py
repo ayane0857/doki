@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from pottery_volume import (
+from doki.api import (
     AnalysisParams,
     analyze_detailed,
     apply_profile_overrides,
@@ -29,7 +29,7 @@ from pottery_volume import (
     resolve_scale,
     write_image,
 )
-from pottery_volume_gui import build_tsv_row, build_tsv_table, pixel_distance
+from doki.gui.app import build_tsv_row, build_tsv_table, pixel_distance
 
 
 def run_pipeline(image: np.ndarray) -> tuple[dict, float]:
@@ -215,18 +215,19 @@ def test_resolve_scale_accepts_analysis_params():
 def test_cli_import_does_not_load_qt():
     """CLI and pure GUI helper imports do not require a Qt runtime."""
     code = (
-        "import sys; import pottery_volume; import pottery_volume_gui; "
-        "import pottery_volume_gui_qt; "
+        "import sys; import doki.api; import doki.gui.app; "
+        "import doki.gui.qt; "
         "assert not any(name == 'PySide6' or name.startswith('PySide6.') "
         "for name in sys.modules)"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
-def test_cli_module_runs_directly():
-    """The packaged CLI entry point responds to --help without launching the GUI."""
+@pytest.mark.parametrize("module", ["doki.cli", "pottery_volume_cli"])
+def test_cli_module_runs_directly(module: str):
+    """Both CLI launch commands respond to --help without launching the GUI."""
     result = subprocess.run(
-        [sys.executable, "-m", "pottery_volume_cli", "--help"],
+        [sys.executable, "-m", module, "--help"],
         capture_output=True,
         check=True,
     )
@@ -259,10 +260,10 @@ def test_pixel_distance_rejects_non_finite_coordinates(point_b):
 
 
 def test_print_result_remains_importable_but_private():
-    import pottery_volume
+    from doki import api
 
-    assert callable(pottery_volume._print_result)
-    assert "_print_result" not in pottery_volume.__all__
+    assert callable(api._print_result)
+    assert "_print_result" not in api.__all__
 
 
 def test_profile_section_polygon_is_valid_and_reports_shapely_centroid():
