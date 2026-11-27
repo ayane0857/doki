@@ -162,6 +162,8 @@ def edit_profiles(self: MainWindow) -> None:
         output.image,
         float(output.result["axis_x_px"]),
         self,
+        min_component_area=output.params.min_component_area,
+        adaptive_threshold=output.params.adaptive_threshold,
         original_image=output.image,
         auto_profile_generator=generate_automatic_profiles,
     )

@@ -45,6 +45,65 @@ def test_old_worker_failures_and_results_are_discarded(tmp_path: Path, qt_widget
     assert "古い解析結果を破棄" in window.status.text()
 
 
+def test_profile_editor_switches_between_original_and_analysis_denoised_image(
+    tmp_path: Path, monkeypatch, qt_widget
+):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from PySide6.QtWidgets import QDialog
+
+    from doki.analysis.core import Profiles
+    from doki.cli import AnalysisParams
+    from doki.gui.profile_editor import ProfileEditorDialog
+    from doki.gui.window import results as results_module
+
+    window = MainWindow(None)
+    qt_widget(window)
+    image_path = tmp_path / "vessel.png"
+    window.image_edit.setText(str(image_path))
+    image = np.full((100, 100, 3), 255, dtype=np.uint8)
+    image[4:7, 5:8] = 0
+    image[12:37, 48:89] = 100
+    image[50:70, 65:68] = 0
+    y_px = np.arange(20.0, 81.0)
+    window.current_analysis = SimpleNamespace(
+        params=AnalysisParams(input_path=image_path, min_component_area=20, adaptive_threshold=True),
+        result={"axis_x_px": 30.0},
+        image=image,
+        profiles=Profiles(
+            y_px, np.full(y_px.size, 8.0), np.full(y_px.size, 20.0), 20.0, 80.0, 20.0
+        ),
+    )
+
+    class PreviewDialog(ProfileEditorDialog):
+        def exec(self):
+            self.show()
+            QApplication.processEvents()
+            canvas = self.canvas
+
+            def preview_pixels() -> list[int]:
+                preview = canvas.grab().toImage()
+                return [
+                    preview.pixelColor(
+                        round(canvas.offset_x + (x - canvas.crop_x) * canvas.scale),
+                        round(canvas.offset_y + (y - canvas.crop_y) * canvas.scale),
+                    ).red()
+                    for x, y in ((6, 5), (70, 24), (66, 60))
+                ]
+
+            assert preview_pixels() == [0, 100, 0]
+            self.denoise_button.click()
+            assert preview_pixels() == [255, 255, 0]
+            self.denoise_button.click()
+            assert preview_pixels() == [0, 100, 0]
+            self.close()
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(results_module, "ProfileEditorDialog", PreviewDialog)
+    window.edit_profiles()
+
+
 def test_profile_edit_recomputes_height_calibration_after_axis_change(
     tmp_path: Path, monkeypatch, qt_widget
 ):

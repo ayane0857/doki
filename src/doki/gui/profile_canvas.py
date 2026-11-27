@@ -12,6 +12,8 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
+from doki.analysis.image import binarize_image, remove_small_components
+
 _MIN_SCALE = 0.05  # Smallest zoom factor of the canvas.
 _MAX_SCALE = 16.0  # Largest zoom factor of the canvas.
 _ZOOM_STEP = 1.15  # Zoom factor per wheel notch (120 angle-delta units).
@@ -33,28 +35,14 @@ def _crop_to_pixmap(image: np.ndarray, bounds: tuple[int, int, int, int]) -> QPi
 
 
 def _denoised_image(image: np.ndarray, min_component_area: int, adaptive: bool) -> np.ndarray:
-    """二値化して小さな連結成分を除去した画像（白背景・黒線）を返す。
-
-    README の自動検出手順（Otsu 二値化 → 前景量が極端なら適応的二値化 →
-    小さい連結成分の除去）に沿った表示用の近似処理。計算結果には影響しない。
-    """
+    """解析と同じ二値化・ノイズ除去を行い、表示用の白背景・黒線画像を返す。"""
     gray = image
     if gray.dtype != np.uint8:
         gray = np.clip(gray, 0, 255).astype(np.uint8)
     if gray.ndim == 3:
         gray = cv2.cvtColor(gray[:, :, :3], cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-    ratio = float(np.count_nonzero(mask)) / float(mask.size)
-    if adaptive or ratio < 0.002 or ratio > 0.5:
-        mask = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 10
-        )
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    keep = np.zeros(count, dtype=bool)
-    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= max(1, int(min_component_area))
-    label_array: Any = np.asarray(labels)
-    cleaned = keep[label_array]
-    return np.where(cleaned, 0, 255).astype(np.uint8)
+    mask, _ = binarize_image(gray, adaptive)
+    return cv2.bitwise_not(remove_small_components(mask, max(1, min_component_area)))
 
 
 class ProfileCanvas(QWidget):
