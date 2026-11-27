@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable, Iterator
+from inspect import getsource
 from pathlib import Path
 
 import pytest
@@ -13,11 +14,12 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pottery_volume_gui_window as window_module
-import pottery_volume_gui_workers as workers_module
-from pottery_volume_gui_window import MainWindow
-from pottery_volume_gui_workers import SetupDownloadWorker, UpdateCheckWorker
-from pottery_volume_updater import UpdateError
+import doki.gui.window.main as window_module
+import doki.gui.workers as workers_module
+from doki.gui.window import updates as updates_module
+from doki.gui.window.main import MainWindow
+from doki.gui.workers import SetupDownloadWorker, UpdateCheckWorker
+from doki.updater import UpdateError
 
 
 @pytest.fixture
@@ -132,7 +134,7 @@ def test_update_notification_actions_start_or_skip_release(monkeypatch, qt_widge
     qt_widget(window)
     settings = MemorySettings()
     window._settings = settings
-    monkeypatch.setattr(window_module, "QMessageBox", UpdateMessageBoxStub)
+    monkeypatch.setattr(updates_module, "QMessageBox", UpdateMessageBoxStub)
     started: list[str] = []
     monkeypatch.setattr(window, "_download_update_setup", started.append)
 
@@ -154,7 +156,7 @@ def test_update_check_worker_logs_network_error_without_raising(caplog, monkeypa
     worker = UpdateCheckWorker()
     worker.failed.connect(failures.append)
 
-    with caplog.at_level(logging.INFO, logger="pottery_volume_gui_workers"):
+    with caplog.at_level(logging.INFO, logger=workers_module.__name__):
         worker.run()
 
     assert failures == ["offline"]
@@ -166,7 +168,7 @@ def test_automatic_network_failure_does_not_show_a_dialog(monkeypatch, qt_widget
     qt_widget(window)
     window._update_check_manual = False
     warnings: list[tuple[object, ...]] = []
-    monkeypatch.setattr(window_module.QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(updates_module.QMessageBox, "warning", lambda *args: warnings.append(args))
 
     window._update_check_failed("offline")
 
@@ -179,7 +181,7 @@ def test_manual_current_version_is_reported(monkeypatch, qt_widget):
     window._update_check_manual = True
     information: list[tuple[object, ...]] = []
     monkeypatch.setattr(
-        window_module.QMessageBox, "information", lambda *args: information.append(args)
+        updates_module.QMessageBox, "information", lambda *args: information.append(args)
     )
 
     window._update_check_finished("a" * 40)
@@ -202,8 +204,8 @@ def test_hash_failure_never_emits_verified_setup_or_launches_it(
         raise UpdateError("Setup.exe の SHA-256 が一致しません。")
 
     monkeypatch.setattr(workers_module, "download_setup", fail_checksum)
-    monkeypatch.setattr(window_module.subprocess, "Popen", lambda *args, **kwargs: launched.append(args))
-    monkeypatch.setattr(window_module.QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(updates_module.subprocess, "Popen", lambda *args, **kwargs: launched.append(args))
+    monkeypatch.setattr(updates_module.QMessageBox, "warning", lambda *args: warnings.append(args))
     worker.finished.connect(completed.append)
     worker.finished.connect(window._update_download_finished)
     worker.failed.connect(window._update_download_failed)
@@ -218,7 +220,7 @@ def test_hash_failure_never_emits_verified_setup_or_launches_it(
 def test_verified_setup_launches_detached_and_closes_the_gui(
     monkeypatch, tmp_path: Path, qt_widget
 ):
-    monkeypatch.setattr(window_module.sys, "platform", "win32")
+    monkeypatch.setattr(updates_module.sys, "platform", "win32")
     window = MainWindow(None, build_version="0.1.0", build_commit="a" * 40)
     qt_widget(window)
     installer_path = tmp_path / "PotteryVolume-Setup.exe"
@@ -230,9 +232,9 @@ def test_verified_setup_launches_detached_and_closes_the_gui(
         command.append(args)
         launch_options.append(kwargs)
 
-    monkeypatch.setattr(window_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(updates_module.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
-        window_module.QApplication, "quit", lambda: quit_calls.append(True)
+        updates_module.QApplication, "quit", lambda: quit_calls.append(True)
     )
 
     window._update_download_finished(installer_path)
@@ -256,7 +258,7 @@ def test_verified_setup_launches_detached_and_closes_the_gui(
 def test_cancelled_close_does_not_start_verified_setup(
     monkeypatch, tmp_path: Path, qt_widget
 ):
-    monkeypatch.setattr(window_module.sys, "platform", "win32")
+    monkeypatch.setattr(updates_module.sys, "platform", "win32")
     window = MainWindow(None, build_version="0.1.0", build_commit="a" * 40)
     qt_widget(window)
     installer_directory = tmp_path / "pending"
@@ -267,7 +269,7 @@ def test_cancelled_close_does_not_start_verified_setup(
     launched: list[tuple[object, ...]] = []
     monkeypatch.setattr(window, "close", lambda: False)
     monkeypatch.setattr(
-        window_module.subprocess,
+        updates_module.subprocess,
         "Popen",
         lambda *args, **kwargs: launched.append((args, kwargs)),
     )
@@ -301,16 +303,14 @@ def test_build_passes_resolved_language_file_and_downloads_atomically():
 
 
 def test_profile_editor_uses_retained_analysis_image():
-    window_source = (
-        Path(__file__).parents[1] / "src" / "pottery_volume_gui_window.py"
-    ).read_text(encoding="utf-8")
+    results_source = getsource(MainWindow.edit_profiles)
 
-    assert "_load_original_image(output.params.input_path)" not in window_source
-    assert "original_image=output.image" in window_source
+    assert "_load_original_image(output.params.input_path)" not in results_source
+    assert "original_image=output.image" in results_source
 
 
 def test_source_execution_skips_startup_update_check(monkeypatch, qt_widget):
-    monkeypatch.setattr(window_module.sys, "platform", "win32")
+    monkeypatch.setattr(updates_module.sys, "platform", "win32")
     window = MainWindow(None)
     qt_widget(window)
     started: list[bool] = []
@@ -324,14 +324,14 @@ def test_source_execution_skips_startup_update_check(monkeypatch, qt_widget):
 def test_update_checks_and_downloads_are_windows_only(
     monkeypatch, tmp_path: Path, qt_widget
 ):
-    monkeypatch.setattr(window_module.sys, "platform", "linux")
+    monkeypatch.setattr(updates_module.sys, "platform", "linux")
     window = MainWindow(None, build_version="0.1.0", build_commit="a" * 40)
     qt_widget(window)
     started: list[bool] = []
     launched: list[tuple[object, ...]] = []
     monkeypatch.setattr(window, "_start_update_check", lambda *, manual: started.append(manual))
     monkeypatch.setattr(
-        window_module.subprocess, "Popen", lambda *args, **kwargs: launched.append(args)
+        updates_module.subprocess, "Popen", lambda *args, **kwargs: launched.append(args)
     )
 
     window.check_updates_on_startup()

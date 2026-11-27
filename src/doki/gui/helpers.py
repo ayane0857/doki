@@ -9,8 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Never, TypedDict, cast
 
-from pottery_volume_cli import AnalysisResult
-from pottery_volume_geometry import pixel_distance
+from doki.analysis.geometry import pixel_distance
+from doki.cli import AnalysisResult
 
 Result = AnalysisResult
 

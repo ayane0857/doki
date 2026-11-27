@@ -14,10 +14,10 @@ from threading import Thread
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
-from pottery_volume_geometry import pixel_distance
+from doki.analysis.geometry import pixel_distance
 
 if TYPE_CHECKING:
-    from pottery_volume_gui_helpers import (
+    from doki.gui.helpers import (
         GUIArgumentParser,
         Info,
         Result,
@@ -28,9 +28,9 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str) -> Any:
     if name in {"GUIArgumentParser", "Info", "Result", "build_tsv_row", "build_tsv_table"}:
-        import pottery_volume_gui_helpers
+        from doki.gui import helpers
 
-        value = getattr(pottery_volume_gui_helpers, name)
+        value = getattr(helpers, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -170,7 +170,7 @@ def _read_build_info() -> tuple[str, str]:
     """Read embedded release metadata; source runs intentionally identify as dev."""
     if not getattr(sys, "frozen", False):
         return "dev", "dev"
-    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
     try:
         info = json.loads((bundle_root / "BUILD_INFO.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
@@ -246,7 +246,7 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     app.setOrganizationName("PotteryVolume")
     _install_gui_exception_hook(QMessageBox, log_path)
 
-    from pottery_volume_gui_style import stylesheet_for_theme
+    from doki.gui.style import stylesheet_for_theme
 
     app.setStyle("Fusion")
     settings = QSettings()
@@ -276,7 +276,7 @@ def launch_gui(initial_image: str | Path | None = None) -> int:
     )
     app.processEvents()
 
-    from pottery_volume_gui_window import MainWindow
+    from doki.gui.window.main import MainWindow
 
     build_version, build_commit = _read_build_info()
     window = MainWindow(

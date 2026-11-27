@@ -12,9 +12,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-import pottery_volume_gui_workers as workers_module
-from pottery_volume_cli import AnalysisParams
-from pottery_volume_gui_workers import (
+import doki.gui.workers as workers_module
+from doki.cli import AnalysisParams
+from doki.gui.workers import (
     AnalysisFinished,
     AnalysisWorker,
     PairFinished,
@@ -70,7 +70,7 @@ def test_scale_worker_failure_includes_source_and_generation(caplog, tmp_path: P
     failures: list[object] = []
     worker.failed.connect(failures.append)
 
-    with caplog.at_level(logging.ERROR, logger="pottery_volume_gui_workers"):
+    with caplog.at_level(logging.ERROR, logger=workers_module.__name__):
         worker.run()
 
     assert failures == [
@@ -85,7 +85,7 @@ def test_analysis_worker_failure_includes_generation_and_path(caplog, tmp_path: 
     failures: list[object] = []
     worker.failed.connect(failures.append)
 
-    with caplog.at_level(logging.ERROR, logger="pottery_volume_gui_workers"):
+    with caplog.at_level(logging.ERROR, logger=workers_module.__name__):
         worker.run()
 
     assert failures == [

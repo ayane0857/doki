@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-import pottery_volume_updater as updater
+import doki.updater as updater
 
 
 class FakeResponse(io.BytesIO):
