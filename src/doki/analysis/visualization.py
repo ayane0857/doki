@@ -32,8 +32,11 @@ def visualize(
     overlay = image.copy()
     if overlay.ndim == 2:
         overlay = cv2.cvtColor(overlay, cv2.COLOR_GRAY2BGR)
-    overlay[section.mask > 0] = (40, 180, 80)
-    if np.any(section.mask):
+    contour_mask = section.contour_mask
+    if contour_mask is None:
+        contour_mask = section.mask
+    overlay[contour_mask > 0] = (40, 180, 80)
+    if np.any(contour_mask):
         # Draw detected profile traces as red inner and blue outer curves.
         inside = np.column_stack(
             (np.rint(axis_x + profiles.r_in_px).astype(int), profiles.y_px.astype(int))

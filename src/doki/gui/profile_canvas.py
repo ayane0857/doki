@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 
 import cv2
@@ -27,15 +28,11 @@ def _crop_to_pixmap(image: np.ndarray, bounds: tuple[int, int, int, int]) -> QPi
     else:
         rgb = cv2.cvtColor(crop, cv2.COLOR_GRAY2RGB)
     height, width = rgb.shape[:2]
-    qimage = QImage(
-        rgb.data, width, height, width * 3, QImage.Format.Format_RGB888
-    ).copy()
+    qimage = QImage(rgb.data, width, height, width * 3, QImage.Format.Format_RGB888).copy()
     return QPixmap.fromImage(qimage)
 
 
-def _denoised_image(
-    image: np.ndarray, min_component_area: int, adaptive: bool
-) -> np.ndarray:
+def _denoised_image(image: np.ndarray, min_component_area: int, adaptive: bool) -> np.ndarray:
     """二値化して小さな連結成分を除去した画像（白背景・黒線）を返す。
 
     README の自動検出手順（Otsu 二値化 → 前景量が極端なら適応的二値化 →
@@ -86,8 +83,11 @@ class ProfileCanvas(QWidget):
         self.y_min = float(profiles.top_y_px)
         self.y_max = float(profiles.bottom_y_px)
         self.active_point: tuple[int, bool, float] | None = None
+        self._dragging_axis = False
         self.on_drag: Any = None
         self.on_drag_end: Any = None
+        self.on_axis_drag: Callable[[float], None] | None = None
+        self.on_axis_drag_end: Callable[[], None] | None = None
         self.on_add_point: Any = None
         self.add_mode = False
         self.add_inner = True
@@ -145,15 +145,17 @@ class ProfileCanvas(QWidget):
         self.outer = outer.copy()
         self.update()
 
+    def set_axis_x(self, axis_x: float) -> None:
+        self.axis_x = float(axis_x)
+        self.update()
+
     def set_add_mode(self, enabled: bool, add_inner: bool) -> None:
         self.add_mode = enabled
         self.add_inner = add_inner
         self._restore_cursor()
 
     def _restore_cursor(self) -> None:
-        self.setCursor(
-            Qt.CursorShape.CrossCursor if self.add_mode else Qt.CursorShape.ArrowCursor
-        )
+        self.setCursor(Qt.CursorShape.CrossCursor if self.add_mode else Qt.CursorShape.ArrowCursor)
 
     def wheelEvent(self, event: Any) -> None:
         """Ctrl+マウスホイールでカーソル位置を中心に拡大・縮小する。"""
@@ -192,14 +194,10 @@ class ProfileCanvas(QWidget):
 
         # 画像は変換行列で描画する（高倍率でも巨大な拡大Pixmapを作らない）
         shown = (
-            self._denoised_pixmap
-            if self.show_denoised and self._denoised_pixmap
-            else self.pixmap
+            self._denoised_pixmap if self.show_denoised and self._denoised_pixmap else self.pixmap
         )
         painter.save()
-        painter.setRenderHint(
-            QPainter.RenderHint.SmoothPixmapTransform, self.scale < 2.0
-        )
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, self.scale < 2.0)
         painter.translate(self.offset_x, self.offset_y)
         painter.scale(self.scale, self.scale)
         painter.drawPixmap(0, 0, shown)
@@ -262,8 +260,27 @@ class ProfileCanvas(QWidget):
         if best is not None and best[0] <= 18:
             self.active_point = (best[1], best[2], best[3])
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
+        if abs(x - axis_screen_x) <= 10:
+            self._dragging_axis = True
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+            event.accept()
 
     def mouseMoveEvent(self, event: Any) -> None:
+        if self._dragging_axis:
+            image_x = (event.position().x() - self.offset_x) / self.scale + self.crop_x
+            new_axis_x = min(
+                self.crop_x + self.crop_width - 1,
+                max(self.crop_x, image_x),
+            )
+            if new_axis_x != self.axis_x:
+                self.axis_x = new_axis_x
+                self.update()
+                if self.on_axis_drag:
+                    self.on_axis_drag(new_axis_x)
+            return
         if self._pan_last is not None:
             pos = event.position()
             self.offset_x += pos.x() - self._pan_last.x()
@@ -272,6 +289,11 @@ class ProfileCanvas(QWidget):
             self.update()
             return
         if self.active_point is None:
+            axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
+            if not self.add_mode and abs(event.position().x() - axis_screen_x) <= 10:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            else:
+                self._restore_cursor()
             return
         x = (event.position().x() - self.offset_x) / self.scale + self.crop_x
         radius = abs(x - self.axis_x)
@@ -290,6 +312,12 @@ class ProfileCanvas(QWidget):
             self._restore_cursor()
             return
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._dragging_axis:
+            self._dragging_axis = False
+            self._restore_cursor()
+            if self.on_axis_drag_end:
+                self.on_axis_drag_end()
             return
         was_dragging = self.active_point is not None
         self.active_point = None

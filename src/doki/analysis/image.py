@@ -19,6 +19,7 @@ class SectionResult:
     roi: tuple[int, int, int, int]
     warnings: list[str] = field(default_factory=list)
     closed_mask: np.ndarray | None = None
+    contour_mask: np.ndarray | None = None
 
 
 def parse_crop(value: str) -> tuple[int, int, int, int]:

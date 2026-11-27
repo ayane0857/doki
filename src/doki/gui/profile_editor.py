@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -21,23 +22,24 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from doki.analysis.core import apply_profile_overrides
+from doki.analysis.core import Profiles, apply_profile_overrides
 from doki.gui.profile_canvas import ProfileCanvas as ProfileCanvas
+from doki.gui.profile_editor_history import ProfileEditorHistory
 
 _MAX_CONTROL_POINTS = 240  # Upper bound on manually added control points per canvas.
-_MAX_UNDO = 200  # Maximum number of undo steps kept in the dialog.
 
 
 class ProfileEditorDialog(QDialog):
     def __init__(
         self,
-        profiles: Any,
+        profiles: Profiles,
         image: np.ndarray,
         axis_x: float,
         parent: Any,
         min_component_area: int = 5,
         adaptive_threshold: bool = False,
         original_image: np.ndarray | None = None,
+        auto_profile_generator: Callable[[float], Profiles] | None = None,
     ) -> None:
         """
         ``min_component_area`` と ``adaptive_threshold`` は「ノイズ除去後の画像を表示」
@@ -46,28 +48,16 @@ class ProfileEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("断面輪郭を画像上で手動補正")
         self.resize(1180, 720)
-        self.corrected_profiles = profiles
-        self.baseline_y = profiles.y_px.copy()
-        self.baseline_inner = profiles.r_in_px.copy()
-        self.baseline_outer = profiles.r_out_px.copy()
-        sample_indices = np.unique(
-            np.linspace(0, len(profiles.y_px) - 1, min(40, len(profiles.y_px))).round().astype(int)
-        )
-        self.sample_y = profiles.y_px[sample_indices]
-        self.inner_values = profiles.r_in_px[sample_indices].copy()
-        self.outer_values = profiles.r_out_px[sample_indices].copy()
-        self.original_inner_values = self.inner_values.copy()
-        self.original_outer_values = self.outer_values.copy()
-        self.edited_inner_indices: set[int] = set()
-        self.edited_outer_indices: set[int] = set()
-        # 元に戻す（Ctrl+Z）用の履歴。_last_state は「現在確定している状態」。
-        self._undo_stack: list[tuple[Any, ...]] = []
-        self._last_state: tuple[Any, ...] = self._snapshot()
+        self.axis_x = float(axis_x)
+        self.auto_profile_generator = auto_profile_generator
+        self._load_profiles(profiles)
+        self._history = ProfileEditorHistory(self)
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
                 "既存点をドラッグして調整できます。「点を追加」を押し、画像の左右どちらかを複数回クリックすると、"
                 "指定した高さに補正点を追加できます。点の間は補間して再計算します。"
+                "白い破線の回転軸もドラッグして移動できます。"
                 "Ctrl+マウスホイールで拡大・縮小、ホイールを押しながらドラッグで画像を移動、"
                 "Ctrl+Z で直前の操作を元に戻せます。"
             )
@@ -85,14 +75,18 @@ class ProfileEditorDialog(QDialog):
         self.denoise_button.setToolTip(
             "二値化して小さなノイズを除去した画像を表示します（表示のみで、計算結果には影響しません）。"
         )
+        self.auto_profile_button = QPushButton("自動輪郭を生成")
+        self.auto_profile_button.setEnabled(auto_profile_generator is not None)
+        self.auto_profile_button.setToolTip(
+            "現在の回転軸で解析時の断面から輪郭を再抽出し、手動補正を置き換えます。"
+        )
         point_controls.addWidget(QLabel("追加する輪郭:"))
         point_controls.addWidget(self.surface_combo)
         point_controls.addWidget(self.add_points_button)
         point_controls.addWidget(self.undo_button)
         point_controls.addWidget(self.denoise_button)
-        point_controls.addWidget(
-            QLabel("クリックした位置から軸までの距離を輪郭半径にします。"), 1
-        )
+        point_controls.addWidget(self.auto_profile_button)
+        point_controls.addWidget(QLabel("クリックした位置から軸までの距離を輪郭半径にします。"), 1)
         layout.addLayout(point_controls)
         body = QHBoxLayout()
         self.canvas = ProfileCanvas(
@@ -107,6 +101,8 @@ class ProfileEditorDialog(QDialog):
         )
         self.canvas.on_drag = self._canvas_changed
         self.canvas.on_drag_end = self._commit
+        self.canvas.on_axis_drag = self._axis_changed
+        self.canvas.on_axis_drag_end = self._commit
         self.canvas.on_add_point = self._add_control_point
         body.addWidget(self.canvas, 1)
         self.table = QTableWidget(len(self.sample_y), 3)
@@ -122,6 +118,7 @@ class ProfileEditorDialog(QDialog):
         self.add_points_button.toggled.connect(self._toggle_add_points)
         self.undo_button.clicked.connect(self._undo)
         self.denoise_button.toggled.connect(self._toggle_denoised)
+        self.auto_profile_button.clicked.connect(self._generate_automatic_profiles)
         self.surface_combo.currentIndexChanged.connect(self._surface_changed)
         # セル編集中は QLineEdit 側の Ctrl+Z（文字入力の取り消し）が優先される
         self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
@@ -135,61 +132,17 @@ class ProfileEditorDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    # ---- 元に戻す（Ctrl+Z） ----
-
-    def _snapshot(self) -> tuple[Any, ...]:
-        return (
-            self.sample_y.copy(),
-            self.inner_values.copy(),
-            self.outer_values.copy(),
-            self.original_inner_values.copy(),
-            self.original_outer_values.copy(),
-            set(self.edited_inner_indices),
-            set(self.edited_outer_indices),
-        )
-
-    @staticmethod
-    def _same_state(a: tuple[Any, ...], b: tuple[Any, ...]) -> bool:
-        return (
-            all(np.array_equal(x, y) for x, y in zip(a[:5], b[:5], strict=True))
-            and a[5] == b[5]
-            and a[6] == b[6]
-        )
-
     def _commit(self) -> None:
-        """現在の状態を確定し、変更前の状態を元に戻す履歴へ積む。"""
-        current = self._snapshot()
-        if self._same_state(current, self._last_state):
-            return
-        self._undo_stack.append(self._last_state)
-        if len(self._undo_stack) > _MAX_UNDO:
-            del self._undo_stack[0]
-        self._last_state = current
-        self.undo_button.setEnabled(True)
+        self._history.commit(self)
+        self.undo_button.setEnabled(self._history.can_undo)
 
     def _undo(self) -> None:
-        if not self._undo_stack or self.canvas.active_point is not None:
+        if self.canvas.active_point is not None or self.canvas._dragging_axis:
             return
-        (
-            sample_y,
-            inner_values,
-            outer_values,
-            original_inner_values,
-            original_outer_values,
-            edited_inner_indices,
-            edited_outer_indices,
-        ) = self._undo_stack.pop()
-        self.sample_y = sample_y.copy()
-        self.inner_values = inner_values.copy()
-        self.outer_values = outer_values.copy()
-        self.original_inner_values = original_inner_values.copy()
-        self.original_outer_values = original_outer_values.copy()
-        self.edited_inner_indices = set(edited_inner_indices)
-        self.edited_outer_indices = set(edited_outer_indices)
-        self._populate_table()
-        self.canvas.set_profiles(self.sample_y, self.inner_values, self.outer_values)
-        self._last_state = self._snapshot()
-        self.undo_button.setEnabled(bool(self._undo_stack))
+        if self._history.undo(self):
+            self.canvas.set_axis_x(self.axis_x)
+            self._refresh_profiles()
+            self.undo_button.setEnabled(self._history.can_undo)
 
     # ---- 画像表示 ----
 
@@ -198,6 +151,40 @@ class ProfileEditorDialog(QDialog):
             "ノイズ除去前の画像に戻す" if enabled else "ノイズ除去後の画像を表示"
         )
         self.canvas.set_show_denoised(enabled)
+
+    def _generate_automatic_profiles(self) -> None:
+        if self.auto_profile_generator is None:
+            return
+        try:
+            profiles = self.auto_profile_generator(self.axis_x)
+        except ValueError as exc:
+            QMessageBox.warning(self, "自動輪郭を生成できません", str(exc))
+            return
+        self._load_profiles(profiles)
+        self._refresh_profiles()
+        self._commit()
+
+    def _load_profiles(self, profiles: Profiles) -> None:
+        self.corrected_profiles = profiles
+        self.baseline_y = profiles.y_px.copy()
+        self.baseline_inner = profiles.r_in_px.copy()
+        self.baseline_outer = profiles.r_out_px.copy()
+        sample_indices = np.unique(
+            np.linspace(0, len(profiles.y_px) - 1, min(40, len(profiles.y_px))).round().astype(int)
+        )
+        self.sample_y = profiles.y_px[sample_indices]
+        self.inner_values = profiles.r_in_px[sample_indices].copy()
+        self.outer_values = profiles.r_out_px[sample_indices].copy()
+        self.original_inner_values = self.inner_values.copy()
+        self.original_outer_values = self.outer_values.copy()
+        self.edited_inner_indices: set[int] = set()
+        self.edited_outer_indices: set[int] = set()
+
+    def _refresh_profiles(self) -> None:
+        self.canvas.y_min = float(self.corrected_profiles.top_y_px)
+        self.canvas.y_max = float(self.corrected_profiles.bottom_y_px)
+        self.canvas.set_profiles(self.sample_y, self.inner_values, self.outer_values)
+        self._populate_table()
 
     def _table_values(self) -> tuple[np.ndarray, np.ndarray]:
         inner_values: list[float] = []
@@ -290,7 +277,7 @@ class ProfileEditorDialog(QDialog):
     def _table_changed(self, _row: int, _column: int) -> None:
         try:
             inner, outer = self._table_values()
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return
         if not np.all(np.isfinite(inner)) or not np.all(np.isfinite(outer)):
             return
@@ -342,6 +329,9 @@ class ProfileEditorDialog(QDialog):
         self.table.blockSignals(False)
         self.inner_values, self.outer_values = inner, outer
 
+    def _axis_changed(self, axis_x: float) -> None:
+        self.axis_x = axis_x
+
     def accept(self) -> None:
         try:
             inner, outer = self._table_values()
@@ -361,9 +351,7 @@ class ProfileEditorDialog(QDialog):
                     return baseline.copy()
                 edit_indices = sorted(edited_indices)
                 edit_y = self.sample_y[edit_indices]
-                edit_delta = (
-                    control_values[edit_indices] - original_control_values[edit_indices]
-                )
+                edit_delta = control_values[edit_indices] - original_control_values[edit_indices]
                 delta = np.interp(
                     y_px,
                     edit_y,
