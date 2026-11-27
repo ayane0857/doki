@@ -277,7 +277,7 @@ class ProfileEditorDialog(QDialog):
     def _table_changed(self, _row: int, _column: int) -> None:
         try:
             inner, outer = self._table_values()
-        except ValueError, AttributeError:
+        except (ValueError, AttributeError):
             return
         if not np.all(np.isfinite(inner)) or not np.all(np.isfinite(outer)):
             return
