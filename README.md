@@ -94,7 +94,24 @@ build/dist/PotteryVolume/PotteryVolume
 build/dist/PotteryVolume_gui/PotteryVolume_gui
 ~~~
 
-GitHub Actions ではコミットごとにWindows版をビルドし、両アプリをZIP形式のArtifactとして保存します。GitHubのActionsから対象の実行結果を開き、Artifactsの `PotteryVolume-Windows-<commit-sha>` をダウンロードしてください。
+GitHub Actions は Pull Request、`master` への push、`v*` タグの push でテストと静的解析を行い、Windows用Setupを `PotteryVolume-Setup` Artifactとして保存します。`master` への push では更新用の rolling Release `latest` を更新し、`v*` タグの push ではタグ名のGitHub ReleaseにSetup・GUI ZIPとSHA-256ファイルを添付します。
+
+### バージョン付きリリース
+
+`pyproject.toml` の `project.version` とタグ名を一致させます。たとえば `0.1.7` をリリースする場合は、まず `project.version` を `0.1.7` に変更し、その変更を `master` にコミットしてからタグを push します。一致しないタグ（`v0.1.7` と `project.version = "0.1.6"` など）はビルドに失敗します。
+
+```powershell
+# pyproject.toml の project.version を 0.1.7 に変更した後
+git add pyproject.toml
+git commit -m "Bump version to 0.1.7"
+git push origin master
+
+# master に push したコミットにタグを付けて公開
+git tag -a v0.1.7 -m "Release v0.1.7"
+git push origin v0.1.7
+```
+
+タグの push で GitHub Actions がテスト・静的解析・Windowsビルドを実行します。成功すると `v0.1.7` のGitHub Releaseが作成され、Setup、GUI ZIP、各SHA-256ファイルが添付されます。Actionsの実行結果とGitHub Releasesで公開状況を確認してください。現在のWorkflowはタグ付きReleaseをプレリリースとして作成します。
 
 CLI版はGUIを開かずに画像を処理します。JSON が必要な場合だけ --json-out を指定してください。
 

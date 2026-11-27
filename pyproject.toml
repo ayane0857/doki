@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pottery-volume"
-version = "0.1.6"
+version = "0.1.7"
 description = "土器実測図から回転体の容量と器壁体積を推定するツール"
 requires-python = ">=3.12,<3.15"
 dependencies = [
