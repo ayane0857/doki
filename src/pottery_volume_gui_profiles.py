@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 
 import cv2
@@ -32,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pottery_volume_core import apply_profile_overrides
+from pottery_volume_core import Profiles, apply_profile_overrides
 
 _MAX_CONTROL_POINTS = 240  # Upper bound on manually added control points per canvas.
 _MIN_SCALE = 0.05  # Smallest zoom factor of the canvas.
@@ -111,8 +112,11 @@ class ProfileCanvas(QWidget):
         self.y_min = float(profiles.top_y_px)
         self.y_max = float(profiles.bottom_y_px)
         self.active_point: tuple[int, bool, float] | None = None
+        self._dragging_axis = False
         self.on_drag: Any = None
         self.on_drag_end: Any = None
+        self.on_axis_drag: Any = None
+        self.on_axis_drag_end: Any = None
         self.on_add_point: Any = None
         self.add_mode = False
         self.add_inner = True
@@ -168,6 +172,10 @@ class ProfileCanvas(QWidget):
         self.sample_y = sample_y.copy()
         self.inner = inner.copy()
         self.outer = outer.copy()
+        self.update()
+
+    def set_axis_x(self, axis_x: float) -> None:
+        self.axis_x = float(axis_x)
         self.update()
 
     def set_add_mode(self, enabled: bool, add_inner: bool) -> None:
@@ -264,6 +272,28 @@ class ProfileCanvas(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         x, y = event.position().x(), event.position().y()
+        if not self.add_mode:
+            best: tuple[float, int, bool, float] | None = None
+            for index, (row_y, inner, outer) in enumerate(
+                zip(self.sample_y, self.inner, self.outer, strict=False)
+            ):
+                for is_inner, radius in ((True, inner), (False, outer)):
+                    for side in (-1.0, 1.0):
+                        point = self._screen(float(radius), float(row_y), side)
+                        distance = math.hypot(x - point.x(), y - point.y())
+                        if best is None or distance < best[0]:
+                            best = (distance, index, is_inner, side)
+            if best is not None and best[0] <= 18:
+                self.active_point = (best[1], best[2], best[3])
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+        axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
+        if abs(x - axis_screen_x) <= 10:
+            self._dragging_axis = True
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+            event.accept()
+            return
         if self.add_mode:
             image_x = (x - self.offset_x) / self.scale + self.crop_x
             image_y = (y - self.offset_y) / self.scale + self.crop_y
@@ -274,21 +304,20 @@ class ProfileCanvas(QWidget):
             ):
                 self.on_add_point(image_y, abs(image_x - self.axis_x), self.add_inner)
             return
-        best: tuple[float, int, bool, float] | None = None
-        for index, (row_y, inner, outer) in enumerate(
-            zip(self.sample_y, self.inner, self.outer, strict=False)
-        ):
-            for is_inner, radius in ((True, inner), (False, outer)):
-                for side in (-1.0, 1.0):
-                    point = self._screen(float(radius), float(row_y), side)
-                    distance = math.hypot(x - point.x(), y - point.y())
-                    if best is None or distance < best[0]:
-                        best = (distance, index, is_inner, side)
-        if best is not None and best[0] <= 18:
-            self.active_point = (best[1], best[2], best[3])
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event: Any) -> None:
+        if self._dragging_axis:
+            image_x = (event.position().x() - self.offset_x) / self.scale + self.crop_x
+            new_axis_x = min(
+                self.crop_x + self.crop_width - 1,
+                max(self.crop_x, image_x),
+            )
+            if new_axis_x != self.axis_x:
+                self.axis_x = new_axis_x
+                self.update()
+                if self.on_axis_drag:
+                    self.on_axis_drag(new_axis_x)
+            return
         if self._pan_last is not None:
             pos = event.position()
             self.offset_x += pos.x() - self._pan_last.x()
@@ -297,6 +326,11 @@ class ProfileCanvas(QWidget):
             self.update()
             return
         if self.active_point is None:
+            axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
+            if abs(event.position().x() - axis_screen_x) <= 10:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            else:
+                self._restore_cursor()
             return
         x = (event.position().x() - self.offset_x) / self.scale + self.crop_x
         radius = abs(x - self.axis_x)
@@ -316,6 +350,12 @@ class ProfileCanvas(QWidget):
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        if self._dragging_axis:
+            self._dragging_axis = False
+            self._restore_cursor()
+            if self.on_axis_drag_end:
+                self.on_axis_drag_end()
+            return
         was_dragging = self.active_point is not None
         self.active_point = None
         self._restore_cursor()
@@ -333,6 +373,7 @@ class ProfileEditorDialog(QDialog):
         min_component_area: int = 5,
         adaptive_threshold: bool = False,
         original_image: np.ndarray | None = None,
+        auto_profile_generator: Callable[[float], Profiles] | None = None,
     ) -> None:
         """
         ``min_component_area`` と ``adaptive_threshold`` は「ノイズ除去後の画像を表示」
@@ -357,6 +398,8 @@ class ProfileEditorDialog(QDialog):
         self.original_outer_values = self.outer_values.copy()
         self.edited_inner_indices: set[int] = set()
         self.edited_outer_indices: set[int] = set()
+        self.axis_x = float(axis_x)
+        self.auto_profile_generator = auto_profile_generator
         # 元に戻す（Ctrl+Z）用の履歴。_last_state は「現在確定している状態」。
         self._undo_stack: list[tuple[Any, ...]] = []
         self._last_state: tuple[Any, ...] = self._snapshot()
@@ -365,6 +408,7 @@ class ProfileEditorDialog(QDialog):
             QLabel(
                 "既存点をドラッグして調整できます。「点を追加」を押し、画像の左右どちらかを複数回クリックすると、"
                 "指定した高さに補正点を追加できます。点の間は補間して再計算します。"
+                "白い破線の回転軸もドラッグして移動できます。"
                 "Ctrl+マウスホイールで拡大・縮小、ホイールを押しながらドラッグで画像を移動、"
                 "Ctrl+Z で直前の操作を元に戻せます。"
             )
@@ -382,11 +426,17 @@ class ProfileEditorDialog(QDialog):
         self.denoise_button.setToolTip(
             "二値化して小さなノイズを除去した画像を表示します（表示のみで、計算結果には影響しません）。"
         )
+        self.auto_profile_button = QPushButton("自動輪郭を生成")
+        self.auto_profile_button.setEnabled(auto_profile_generator is not None)
+        self.auto_profile_button.setToolTip(
+            "現在の回転軸で解析時の断面から輪郭を再抽出し、手動補正を置き換えます。"
+        )
         point_controls.addWidget(QLabel("追加する輪郭:"))
         point_controls.addWidget(self.surface_combo)
         point_controls.addWidget(self.add_points_button)
         point_controls.addWidget(self.undo_button)
         point_controls.addWidget(self.denoise_button)
+        point_controls.addWidget(self.auto_profile_button)
         point_controls.addWidget(
             QLabel("クリックした位置から軸までの距離を輪郭半径にします。"), 1
         )
@@ -404,6 +454,8 @@ class ProfileEditorDialog(QDialog):
         )
         self.canvas.on_drag = self._canvas_changed
         self.canvas.on_drag_end = self._commit
+        self.canvas.on_axis_drag = self._axis_changed
+        self.canvas.on_axis_drag_end = self._commit
         self.canvas.on_add_point = self._add_control_point
         body.addWidget(self.canvas, 1)
         self.table = QTableWidget(len(self.sample_y), 3)
@@ -421,6 +473,7 @@ class ProfileEditorDialog(QDialog):
         self.add_points_button.toggled.connect(self._toggle_add_points)
         self.undo_button.clicked.connect(self._undo)
         self.denoise_button.toggled.connect(self._toggle_denoised)
+        self.auto_profile_button.clicked.connect(self._generate_automatic_profiles)
         self.surface_combo.currentIndexChanged.connect(self._surface_changed)
         # セル編集中は QLineEdit 側の Ctrl+Z（文字入力の取り消し）が優先される
         self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
@@ -445,6 +498,11 @@ class ProfileEditorDialog(QDialog):
             self.original_outer_values.copy(),
             set(self.edited_inner_indices),
             set(self.edited_outer_indices),
+            self.axis_x,
+            self.baseline_y.copy(),
+            self.baseline_inner.copy(),
+            self.baseline_outer.copy(),
+            self.corrected_profiles,
         )
 
     @staticmethod
@@ -453,6 +511,9 @@ class ProfileEditorDialog(QDialog):
             all(np.array_equal(x, y) for x, y in zip(a[:5], b[:5], strict=True))
             and a[5] == b[5]
             and a[6] == b[6]
+            and a[7] == b[7]
+            and all(np.array_equal(x, y) for x, y in zip(a[8:11], b[8:11], strict=True))
+            and a[11] is b[11]
         )
 
     def _commit(self) -> None:
@@ -467,7 +528,11 @@ class ProfileEditorDialog(QDialog):
         self.undo_button.setEnabled(True)
 
     def _undo(self) -> None:
-        if not self._undo_stack or self.canvas.active_point is not None:
+        if (
+            not self._undo_stack
+            or self.canvas.active_point is not None
+            or self.canvas._dragging_axis
+        ):
             return
         (
             sample_y,
@@ -477,6 +542,11 @@ class ProfileEditorDialog(QDialog):
             original_outer_values,
             edited_inner_indices,
             edited_outer_indices,
+            axis_x,
+            baseline_y,
+            baseline_inner,
+            baseline_outer,
+            corrected_profiles,
         ) = self._undo_stack.pop()
         self.sample_y = sample_y.copy()
         self.inner_values = inner_values.copy()
@@ -485,8 +555,16 @@ class ProfileEditorDialog(QDialog):
         self.original_outer_values = original_outer_values.copy()
         self.edited_inner_indices = set(edited_inner_indices)
         self.edited_outer_indices = set(edited_outer_indices)
+        self.axis_x = axis_x
+        self.baseline_y = baseline_y.copy()
+        self.baseline_inner = baseline_inner.copy()
+        self.baseline_outer = baseline_outer.copy()
+        self.corrected_profiles = corrected_profiles
         self._populate_table()
         self.canvas.set_profiles(self.sample_y, self.inner_values, self.outer_values)
+        self.canvas.set_axis_x(self.axis_x)
+        self.canvas.y_min = float(self.baseline_y[0])
+        self.canvas.y_max = float(self.baseline_y[-1])
         self._last_state = self._snapshot()
         self.undo_button.setEnabled(bool(self._undo_stack))
 
@@ -497,6 +575,37 @@ class ProfileEditorDialog(QDialog):
             "ノイズ除去前の画像に戻す" if enabled else "ノイズ除去後の画像を表示"
         )
         self.canvas.set_show_denoised(enabled)
+
+    def _generate_automatic_profiles(self) -> None:
+        if self.auto_profile_generator is None:
+            return
+        try:
+            profiles = self.auto_profile_generator(self.axis_x)
+        except ValueError as exc:
+            QMessageBox.warning(self, "自動輪郭を生成できません", str(exc))
+            return
+
+        self.corrected_profiles = profiles
+        self.baseline_y = profiles.y_px.copy()
+        self.baseline_inner = profiles.r_in_px.copy()
+        self.baseline_outer = profiles.r_out_px.copy()
+        sample_indices = np.unique(
+            np.linspace(0, len(profiles.y_px) - 1, min(40, len(profiles.y_px)))
+            .round()
+            .astype(int)
+        )
+        self.sample_y = profiles.y_px[sample_indices]
+        self.inner_values = profiles.r_in_px[sample_indices].copy()
+        self.outer_values = profiles.r_out_px[sample_indices].copy()
+        self.original_inner_values = self.inner_values.copy()
+        self.original_outer_values = self.outer_values.copy()
+        self.edited_inner_indices.clear()
+        self.edited_outer_indices.clear()
+        self.canvas.y_min = float(profiles.top_y_px)
+        self.canvas.y_max = float(profiles.bottom_y_px)
+        self.canvas.set_profiles(self.sample_y, self.inner_values, self.outer_values)
+        self._populate_table()
+        self._commit()
 
     def _table_values(self) -> tuple[np.ndarray, np.ndarray]:
         inner_values: list[float] = []
@@ -646,6 +755,9 @@ class ProfileEditorDialog(QDialog):
                 outer_item.setText(f"{outer_value:.2f}")
         self.table.blockSignals(False)
         self.inner_values, self.outer_values = inner, outer
+
+    def _axis_changed(self, axis_x: float) -> None:
+        self.axis_x = axis_x
 
     def accept(self) -> None:
         try:
