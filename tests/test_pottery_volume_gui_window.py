@@ -45,6 +45,217 @@ def test_old_worker_failures_and_results_are_discarded(tmp_path: Path, qt_widget
     assert "古い解析結果を破棄" in window.status.text()
 
 
+def test_profile_edit_recomputes_height_calibration_after_axis_change(
+    tmp_path: Path, monkeypatch, qt_widget
+):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from PySide6.QtWidgets import QDialog
+
+    import doki.gui.window.results as window_module
+    from doki.analysis.core import Profiles
+    from doki.cli import AnalysisParams
+
+    window = MainWindow(None)
+    qt_widget(window)
+    image_path = tmp_path / "vessel.png"
+    y_px = np.arange(20.0, 81.0)
+    original_profiles = Profiles(
+        y_px, np.full(len(y_px), 5.0), np.full(len(y_px), 15.0), 20, 80, 20
+    )
+    corrected_y = np.arange(10.0, 101.0)
+    corrected_profiles = Profiles(
+        corrected_y,
+        np.full(len(corrected_y), 5.0),
+        np.full(len(corrected_y), 15.0),
+        10,
+        100,
+        10,
+    )
+    corrected_profiles.warnings.extend(["既存の注意", "補間警告"])
+    output = SimpleNamespace(
+        params=AnalysisParams(input_path=image_path, vessel_height_mm=120.0),
+        result={"input": str(image_path), "axis_x_px": 30.0, "mm_per_px": 2.0},
+        section=SimpleNamespace(mask=np.zeros((120, 100), dtype=np.uint8)),
+        section_mode="lines",
+        warnings=["既存の注意"],
+        image=np.zeros((120, 100), dtype=np.uint8),
+        profiles=original_profiles,
+        mm_per_px=2.0,
+    )
+    window.current_analysis = output
+    window.image_edit.setText(str(image_path))
+    window.axis_edit.setText("30.00")
+    window._refresh_result = lambda: None
+    captured_scales = []
+
+    class DialogStub:
+        def __init__(self, *_args, **_kwargs):
+            self.corrected_profiles = corrected_profiles
+            self.axis_x = 40.0
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def deleteLater(self):
+            pass
+
+    def fake_compute_volumes(_profiles, _mask, _axis, mm_per_px, _mode):
+        captured_scales.append(mm_per_px)
+        return {
+            "mm_per_px": mm_per_px,
+            "vessel_height": (_profiles.bottom_y_px - _profiles.top_y_px) * mm_per_px,
+        }
+
+    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(window_module, "compute_volumes", fake_compute_volumes)
+
+    window.edit_profiles()
+
+    assert captured_scales == pytest.approx([120.0 / 90.0])
+    assert output.mm_per_px == pytest.approx(120.0 / 90.0)
+    assert output.result["mm_per_px"] == pytest.approx(120.0 / 90.0)
+    assert output.result["vessel_height"] == pytest.approx(120.0)
+    assert window.axis_edit.text() == "40.00"
+    assert output.warnings.count("既存の注意") == 1
+    assert "補間警告" in output.warnings
+    assert len(output.warnings) == 3
+    assert output.warnings[-1].endswith("を手動補正しました。")
+
+
+def test_automatic_profile_regeneration_uses_original_contour_mask(
+    tmp_path: Path, monkeypatch, qt_widget
+):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from PySide6.QtWidgets import QDialog
+
+    import doki.gui.window.results as window_module
+    from doki.analysis.core import Profiles, SectionResult
+    from doki.cli import AnalysisParams
+
+    window = MainWindow(None)
+    qt_widget(window)
+    image_path = tmp_path / "vessel.png"
+    y_px = np.arange(20.0, 81.0)
+    profiles = Profiles(
+        y_px, np.full(len(y_px), 5.0), np.full(len(y_px), 15.0), 20, 80, 20
+    )
+    contour_mask = np.full((100, 100), 255, dtype=np.uint8)
+    derived_strip = np.zeros((100, 100), dtype=np.uint8)
+    output = SimpleNamespace(
+        params=AnalysisParams(input_path=image_path),
+        result={"input": str(image_path), "axis_x_px": 30.0},
+        section=SectionResult(
+            mask=derived_strip,
+            mode="lines",
+            roi=(0, 0, 100, 100),
+            warnings=[],
+            contour_mask=contour_mask,
+        ),
+        section_mode="lines",
+        warnings=[],
+        image=np.zeros((100, 100), dtype=np.uint8),
+        profiles=profiles,
+        mm_per_px=None,
+    )
+    window.current_analysis = output
+    window.image_edit.setText(str(image_path))
+    captured_masks: list[np.ndarray] = []
+
+    class DialogStub:
+        def __init__(self, *_args, auto_profile_generator, **_kwargs):
+            auto_profile_generator(35.0)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+        def deleteLater(self):
+            pass
+
+    def fake_extract_profiles(section, *_args):
+        captured_masks.append(section.mask.copy())
+        return profiles
+
+    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(window_module, "extract_profiles", fake_extract_profiles)
+
+    window.edit_profiles()
+
+    assert len(captured_masks) == 1
+    np.testing.assert_array_equal(captured_masks[0], contour_mask)
+    np.testing.assert_array_equal(output.section.mask, derived_strip)
+
+
+@pytest.mark.parametrize("stale_change", ["path", "identity", "generation"])
+def test_profile_edit_discards_stale_dialog_results(
+    tmp_path: Path, monkeypatch, stale_change: str, qt_widget
+):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from PySide6.QtWidgets import QDialog
+
+    import doki.gui.window.results as window_module
+    from doki.analysis.core import Profiles
+    from doki.cli import AnalysisParams
+
+    window = MainWindow(None)
+    qt_widget(window)
+    image_path = tmp_path / "vessel.png"
+    y_px = np.arange(20.0, 81.0)
+    profiles = Profiles(
+        y_px, np.full(len(y_px), 5.0), np.full(len(y_px), 15.0), 20, 80, 20
+    )
+    output = SimpleNamespace(
+        params=AnalysisParams(input_path=image_path),
+        result={"input": str(image_path), "axis_x_px": 30.0},
+        section=SimpleNamespace(mask=np.zeros((100, 100), dtype=np.uint8)),
+        section_mode="lines",
+        warnings=[],
+        image=np.zeros((100, 100), dtype=np.uint8),
+        profiles=profiles,
+        mm_per_px=None,
+    )
+    window.current_analysis = output
+    window.image_edit.setText(str(image_path))
+    window.axis_edit.setText("30.00")
+    compute_called = False
+
+    class DialogStub:
+        def __init__(self, *_args, **_kwargs):
+            self.corrected_profiles = profiles
+            self.axis_x = 40.0
+
+        def exec(self):
+            if stale_change == "path":
+                window.image_edit.setText(str(tmp_path / "other.png"))
+            elif stale_change == "identity":
+                window.current_analysis = SimpleNamespace()
+            else:
+                window.analysis_generation += 1
+            return QDialog.DialogCode.Accepted
+
+        def deleteLater(self):
+            pass
+
+    def fake_compute_volumes(*_args):
+        nonlocal compute_called
+        compute_called = True
+        return {}
+
+    monkeypatch.setattr(window_module, "ProfileEditorDialog", DialogStub)
+    monkeypatch.setattr(window_module, "compute_volumes", fake_compute_volumes)
+
+    window.edit_profiles()
+
+    assert not compute_called
+    assert output.profiles is profiles
+    assert window.axis_edit.text() == "30.00"
+
+
 def test_scale_auto_apply_uses_the_confident_label_for_the_selected_bar(tmp_path: Path, qt_widget):
     from doki.scale.calibration import (
         ScaleBarCandidate,

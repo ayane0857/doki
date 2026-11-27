@@ -1,21 +1,31 @@
-# Security Policy
+# セキュリティポリシー
 
-## Supported Versions
+PotteryVolume のセキュリティに関する問題をご報告いただきありがとうございます。
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+## サポート対象のバージョン
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+セキュリティ修正は、原則として最新の安定版に提供します。古いバージョンやプレリリース版をご利用の場合は、最新の安定版への更新をお願いします。
 
-## Reporting a Vulnerability
+| バージョン | サポート |
+| --- | --- |
+| 最新の安定版 | 対象 |
+| それ以前のバージョン、プレリリース版 | 対象外 |
 
-Use this section to tell people how to report a vulnerability.
+## 動作・開発環境
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+- 必要な Python のバージョンは `3.12` 以上 `3.15` 未満です。
+- GitHub Actions では Ubuntu 上で Python 3.12、3.13、3.14 のテストを実行し、Python 3.14 で静的解析を行います。Windows の GitHub Actions では配布用ビルドを行います。
+- 開発用の依存関係は `python -m pip install -r requirements-dev.txt` でインストールできます。テストは `python -m pytest -q` で実行します。
+
+## 脆弱性の報告
+
+脆弱性の疑いがある問題は、[GitHub の非公開脆弱性報告](https://github.com/ayane0857/doki/security/advisories/new)からお知らせください。調査が完了する前に、公開 Issue、Discussion、Pull Request へ脆弱性の詳細を書き込まないでください。
+
+報告には、可能な範囲で次の情報を含めてください。
+
+- 影響を受けるバージョンと実行環境
+- 問題の概要と、想定される影響
+- 再現手順や、問題を確認できる最小限のサンプル
+- すでに把握している回避策
+
+報告を受領した場合、原則として7日以内に受領連絡を行い、その後は少なくとも30日ごとに状況をお知らせします。修正や公開の時期は、影響範囲と対応状況を確認したうえで、報告者と調整します。報告内容は、修正や調整に必要な範囲でのみ取り扱います。

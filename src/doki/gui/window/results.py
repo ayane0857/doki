@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,7 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from doki.analysis.core import compute_volumes, visualize
+from doki.analysis.core import Profiles, compute_volumes, extract_profiles, visualize
 from doki.gui.profile_editor import ProfileEditorDialog
 
 if TYPE_CHECKING:
@@ -137,24 +139,62 @@ def edit_profiles(self: MainWindow) -> None:
             "表示中の画像と解析結果の画像が一致しないため輪郭を編集できません。",
         )
         return
+    analysis_generation = self.analysis_generation
+
+    def generate_automatic_profiles(axis_x: float) -> Profiles:
+        contour_mask = output.section.contour_mask
+        if contour_mask is None:
+            contour_mask = output.section.mask
+        section = replace(
+            output.section,
+            mask=contour_mask.copy(),
+            warnings=list(output.section.warnings),
+        )
+        return extract_profiles(
+            section,
+            axis_x,
+            output.params.liquid_level_y,
+            output.params.smooth_window,
+        )
+
     dialog = ProfileEditorDialog(
         output.profiles,
         output.image,
         float(output.result["axis_x_px"]),
         self,
         original_image=output.image,
+        auto_profile_generator=generate_automatic_profiles,
     )
     if dialog.exec() != QDialog.DialogCode.Accepted:
         dialog.deleteLater()
         return
+    current_text = self.image_edit.text().strip().strip('"')
+    if (
+        self.current_analysis is not output
+        or self.analysis_generation != analysis_generation
+        or not current_text
+        or not self._same_path(output.params.input_path, Path(current_text))
+    ):
+        dialog.deleteLater()
+        self.status.setText("画像または解析結果が変更されたため、輪郭補正を破棄しました。")
+        return
     try:
         corrected_profiles = dialog.corrected_profiles
+        corrected_axis_x = dialog.axis_x
         dialog.deleteLater()
+        mm_per_px = output.mm_per_px
+        if output.params.vessel_height_mm is not None:
+            measured_height_px = (
+                corrected_profiles.bottom_y_px - corrected_profiles.top_y_px
+            )
+            if not math.isfinite(measured_height_px) or measured_height_px <= 0:
+                raise ValueError("補正後の器高を計算できません。")
+            mm_per_px = output.params.vessel_height_mm / measured_height_px
         recomputed = compute_volumes(
             corrected_profiles,
             output.section.mask,
-            float(output.result["axis_x_px"]),
-            output.mm_per_px,
+            corrected_axis_x,
+            mm_per_px,
             output.section_mode,
         )
     except (OSError, ValueError) as exc:
@@ -163,10 +203,20 @@ def edit_profiles(self: MainWindow) -> None:
         )
         return
     output.profiles = corrected_profiles
-    cast(dict[str, Any], output.result).update(cast(dict[str, Any], recomputed))
-    output.warnings.append(
-        "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
+    output.params = replace(output.params, axis_x=corrected_axis_x)
+    output.mm_per_px = mm_per_px
+    self.axis_edit.setText(f"{corrected_axis_x:.2f}")
+    cast(dict[str, Any], output.result).update(
+        cast(dict[str, Any], recomputed),
+        axis_x_px=corrected_axis_x,
     )
+    correction_warning = (
+        "\u65ad\u9762\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u307e\u305f\u306f"
+        "\u56de\u8ee2\u8ef8\u3092\u624b\u52d5\u88dc\u6b63\u3057\u307e\u3057\u305f\u3002"
+    )
+    for warning in [*corrected_profiles.warnings, correction_warning]:
+        if warning not in output.warnings:
+            output.warnings.append(warning)
     if output.params.debug_dir:
         try:
             visualize(

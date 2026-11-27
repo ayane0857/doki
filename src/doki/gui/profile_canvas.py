@@ -86,8 +86,11 @@ class ProfileCanvas(QWidget):
         self.y_min = float(profiles.top_y_px)
         self.y_max = float(profiles.bottom_y_px)
         self.active_point: tuple[int, bool, float] | None = None
+        self._dragging_axis = False
         self.on_drag: Any = None
         self.on_drag_end: Any = None
+        self.on_axis_drag: Any = None
+        self.on_axis_drag_end: Any = None
         self.on_add_point: Any = None
         self.add_mode = False
         self.add_inner = True
@@ -143,6 +146,10 @@ class ProfileCanvas(QWidget):
         self.sample_y = sample_y.copy()
         self.inner = inner.copy()
         self.outer = outer.copy()
+        self.update()
+
+    def set_axis_x(self, axis_x: float) -> None:
+        self.axis_x = float(axis_x)
         self.update()
 
     def set_add_mode(self, enabled: bool, add_inner: bool) -> None:
@@ -239,6 +246,28 @@ class ProfileCanvas(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         x, y = event.position().x(), event.position().y()
+        if not self.add_mode:
+            best: tuple[float, int, bool, float] | None = None
+            for index, (row_y, inner, outer) in enumerate(
+                zip(self.sample_y, self.inner, self.outer, strict=False)
+            ):
+                for is_inner, radius in ((True, inner), (False, outer)):
+                    for side in (-1.0, 1.0):
+                        point = self._screen(float(radius), float(row_y), side)
+                        distance = math.hypot(x - point.x(), y - point.y())
+                        if best is None or distance < best[0]:
+                            best = (distance, index, is_inner, side)
+            if best is not None and best[0] <= 18:
+                self.active_point = (best[1], best[2], best[3])
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+        axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
+        if not self.add_mode and abs(x - axis_screen_x) <= 10:
+            self._dragging_axis = True
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+            event.accept()
+            return
         if self.add_mode:
             image_x = (x - self.offset_x) / self.scale + self.crop_x
             image_y = (y - self.offset_y) / self.scale + self.crop_y
@@ -249,21 +278,20 @@ class ProfileCanvas(QWidget):
             ):
                 self.on_add_point(image_y, abs(image_x - self.axis_x), self.add_inner)
             return
-        best: tuple[float, int, bool, float] | None = None
-        for index, (row_y, inner, outer) in enumerate(
-            zip(self.sample_y, self.inner, self.outer, strict=False)
-        ):
-            for is_inner, radius in ((True, inner), (False, outer)):
-                for side in (-1.0, 1.0):
-                    point = self._screen(float(radius), float(row_y), side)
-                    distance = math.hypot(x - point.x(), y - point.y())
-                    if best is None or distance < best[0]:
-                        best = (distance, index, is_inner, side)
-        if best is not None and best[0] <= 18:
-            self.active_point = (best[1], best[2], best[3])
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event: Any) -> None:
+        if self._dragging_axis:
+            image_x = (event.position().x() - self.offset_x) / self.scale + self.crop_x
+            new_axis_x = min(
+                self.crop_x + self.crop_width - 1,
+                max(self.crop_x, image_x),
+            )
+            if new_axis_x != self.axis_x:
+                self.axis_x = new_axis_x
+                self.update()
+                if self.on_axis_drag:
+                    self.on_axis_drag(new_axis_x)
+            return
         if self._pan_last is not None:
             pos = event.position()
             self.offset_x += pos.x() - self._pan_last.x()
@@ -272,6 +300,11 @@ class ProfileCanvas(QWidget):
             self.update()
             return
         if self.active_point is None:
+            axis_screen_x = self.offset_x + (self.axis_x - self.crop_x) * self.scale
+            if abs(event.position().x() - axis_screen_x) <= 10:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            else:
+                self._restore_cursor()
             return
         x = (event.position().x() - self.offset_x) / self.scale + self.crop_x
         radius = abs(x - self.axis_x)
@@ -290,6 +323,12 @@ class ProfileCanvas(QWidget):
             self._restore_cursor()
             return
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._dragging_axis:
+            self._dragging_axis = False
+            self._restore_cursor()
+            if self.on_axis_drag_end:
+                self.on_axis_drag_end()
             return
         was_dragging = self.active_point is not None
         self.active_point = None
