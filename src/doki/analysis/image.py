@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import ExifTags, Image
 
 
 @dataclass
@@ -59,6 +61,30 @@ def binarize_image(gray: np.ndarray, adaptive: bool = False) -> tuple[np.ndarray
     return otsu, "otsu"
 
 
+def _orient_png(bgr: np.ndarray, encoded: np.ndarray) -> np.ndarray:
+    """Restore the EXIF transform skipped by OpenCV's IMREAD_UNCHANGED."""
+    with Image.open(BytesIO(encoded.tobytes()), formats=["PNG"]) as png:
+        orientation = png.getexif().get(ExifTags.Base.Orientation)
+
+    match orientation:
+        case 2:
+            return cv2.flip(bgr, 1)
+        case 3:
+            return cv2.rotate(bgr, cv2.ROTATE_180)
+        case 4:
+            return cv2.flip(bgr, 0)
+        case 5:
+            return cv2.transpose(bgr)
+        case 6:
+            return cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
+        case 7:
+            return cv2.flip(cv2.transpose(bgr), -1)
+        case 8:
+            return cv2.rotate(bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        case _:
+            return bgr
+
+
 def read_image(path: Path) -> np.ndarray:
     """Read a BGR image from a Unicode path, compositing transparent PNGs on white."""
     try:
@@ -68,14 +94,15 @@ def read_image(path: Path) -> np.ndarray:
     if encoded[:8].tobytes() == b"\x89PNG\r\n\x1a\n":
         png = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
         if png is not None and png.ndim == 3 and png.shape[2] == 4:
-            white = np.iinfo(png.dtype).max
+            is_16_bit = png.dtype == np.uint16
+            white = np.iinfo(np.uint16 if is_16_bit else np.uint8).max
             if np.any(png[:, :, 3] != white):
                 pixels = png.astype(np.uint32)
                 alpha = pixels[:, :, 3:4]
                 bgr = (pixels[:, :, :3] * alpha + white * (white - alpha) + white // 2) // white
-                if png.dtype == np.uint16:
+                if is_16_bit:
                     bgr >>= 8
-                return bgr.astype(np.uint8)
+                return _orient_png(bgr.astype(np.uint8), encoded)
     image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"画像を読み込めません: {path}")

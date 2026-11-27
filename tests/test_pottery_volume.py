@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import pytest
+from PIL import ExifTags, Image
 
 from doki.api import (
     AnalysisParams,
@@ -458,6 +459,29 @@ def test_read_image_composites_png_alpha_on_white(tmp_path: Path, dtype):
     np.testing.assert_array_equal(
         read_image(path), np.array([[[255, 255, 255], [127, 127, 127], [10, 20, 30]]])
     )
+
+
+@pytest.mark.parametrize("orientation", [1, 6])
+def test_read_image_preserves_transparent_png_exif_orientation(tmp_path: Path, orientation):
+    path = tmp_path / "oriented.png"
+    rgba = np.array(
+        [
+            [[0, 0, 0, 0], [255, 0, 0, 255], [0, 255, 0, 255]],
+            [[0, 0, 255, 255], [0, 0, 0, 255], [64, 64, 64, 255]],
+        ],
+        dtype=np.uint8,
+    )
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = orientation
+    Image.fromarray(rgba).save(path, exif=exif)
+
+    expected = np.array(
+        [[[255, 255, 255], [0, 0, 255], [0, 255, 0]], [[255, 0, 0], [0, 0, 0], [64, 64, 64]]],
+        dtype=np.uint8,
+    )
+    if orientation == 6:
+        expected = np.rot90(expected, k=-1)
+    np.testing.assert_array_equal(read_image(path), expected)
 
 
 def test_build_tsv_row_and_table_for_excel():
