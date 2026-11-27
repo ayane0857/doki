@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import pytest
+from PIL import ExifTags, Image
 
 from doki.api import (
     AnalysisParams,
@@ -30,6 +31,7 @@ from doki.api import (
     write_image,
 )
 from doki.gui.app import build_tsv_row, build_tsv_table, pixel_distance
+from doki.scale.calibration import extract_scale_from_image
 
 
 def run_pipeline(image: np.ndarray) -> tuple[dict, float]:
@@ -333,6 +335,25 @@ def test_pottery_fixture_bottom_profile_rejects_terminal_fragment():
     assert any("器底付近" in warning for warning in profiles.warnings)
 
 
+def test_sample_pair_measures_vessel_instead_of_transparent_border():
+    fixtures = Path(__file__).parent / "fixtures"
+    label, bar, mm_per_px = extract_scale_from_image(read_image(fixtures / "sample-2.png"))
+
+    assert label is not None and label.length_mm == 150
+    assert bar is not None and bar.pixels == pytest.approx(948, abs=4)
+    assert mm_per_px is not None
+
+    output = analyze_detailed(
+        AnalysisParams(input_path=fixtures / "sample-1.png", scale_mm_per_px=mm_per_px)
+    )
+
+    assert output.profiles.top_y_px == pytest.approx(175, abs=10)
+    assert output.profiles.bottom_y_px == pytest.approx(471, abs=5)
+    assert output.result["axis_x_px"] == pytest.approx(305, abs=3)
+    assert output.result["capacity_ml"] == pytest.approx(67, rel=0.05)
+    assert output.result["wall_volume_ml"] == pytest.approx(37, rel=0.05)
+
+
 @pytest.mark.parametrize(
     "option",
     ["--scale-mm-per-px", "--scale-bar-px", "--scale-bar-mm", "--vessel-height-mm"],
@@ -424,6 +445,43 @@ def test_read_and_write_image_unicode_path(tmp_path: Path):
     loaded = read_image(target_file)
     assert loaded.shape == (30, 40, 3)
     np.testing.assert_array_equal(loaded, sample)
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
+def test_read_image_composites_png_alpha_on_white(tmp_path: Path, dtype):
+    path = tmp_path / "alpha.png"
+    shift = 0 if dtype == np.uint8 else 8
+    image = np.array([[[0, 0, 0, 0], [0, 0, 0, 128], [10, 20, 30, 255]]], dtype=dtype)
+    image <<= shift
+    image[0, 2, 3] = np.iinfo(dtype).max
+    write_image(path, image)
+
+    np.testing.assert_array_equal(
+        read_image(path), np.array([[[255, 255, 255], [127, 127, 127], [10, 20, 30]]])
+    )
+
+
+@pytest.mark.parametrize("orientation", [1, 6])
+def test_read_image_preserves_transparent_png_exif_orientation(tmp_path: Path, orientation):
+    path = tmp_path / "oriented.png"
+    rgba = np.array(
+        [
+            [[0, 0, 0, 0], [255, 0, 0, 255], [0, 255, 0, 255]],
+            [[0, 0, 255, 255], [0, 0, 0, 255], [64, 64, 64, 255]],
+        ],
+        dtype=np.uint8,
+    )
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = orientation
+    Image.fromarray(rgba).save(path, exif=exif)
+
+    expected = np.array(
+        [[[255, 255, 255], [0, 0, 255], [0, 255, 0]], [[255, 0, 0], [0, 0, 0], [64, 64, 64]]],
+        dtype=np.uint8,
+    )
+    if orientation == 6:
+        expected = np.rot90(expected, k=-1)
+    np.testing.assert_array_equal(read_image(path), expected)
 
 
 def test_build_tsv_row_and_table_for_excel():
