@@ -194,6 +194,17 @@ def test_analysis_params_preserve_baseline_numeric_results(tmp_path: Path):
     assert "scale_mm_per_px" not in output.result
 
 
+def test_analysis_retains_original_lines_contour_mask(tmp_path: Path):
+    image_path = tmp_path / "cylinder-lines.png"
+    write_image(image_path, cylinder_shell())
+
+    output = analyze_detailed(AnalysisParams(input_path=image_path, profile_mode="lines"))
+
+    assert output.section.contour_mask is not None
+    assert np.any(output.section.contour_mask)
+    assert not np.array_equal(output.section.contour_mask, output.section.mask)
+
+
 def test_resolve_scale_accepts_analysis_params():
     params = AnalysisParams(input_path=Path("input.png"), scale_mm_per_px=0.25)
     profiles = SimpleNamespace(top_y_px=0.0, bottom_y_px=10.0)
